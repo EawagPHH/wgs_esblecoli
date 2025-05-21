@@ -1,0 +1,7 @@
+"Transition","Below 95% CI","Within 95% CI","Above 95% CI"
+"clinics_to_wastewater",7,993,0
+"clinics_to_wildlife",23,977,0
+"wastewater_to_clinics",1,993,6
+"wastewater_to_wildlife",786,214,0
+"wildlife_to_clinics",26,974,0
+"wildlife_to_wastewater",178,822,0

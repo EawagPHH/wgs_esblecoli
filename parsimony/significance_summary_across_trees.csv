@@ -1,0 +1,13 @@
+"Transition","Below 95% CI","Within 95% CI","Above 95% CI"
+"clinics_to_livestock",281,719,0
+"clinics_to_wastewater",825,175,0
+"clinics_to_wildlife",471,529,0
+"livestock_to_clinics",156,844,0
+"livestock_to_wastewater",327,673,0
+"livestock_to_wildlife",0,992,8
+"wastewater_to_clinics",713,287,0
+"wastewater_to_livestock",370,630,0
+"wastewater_to_wildlife",368,632,0
+"wildlife_to_clinics",895,105,0
+"wildlife_to_livestock",0,708,292
+"wildlife_to_wastewater",173,827,0

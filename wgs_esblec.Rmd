@@ -1,0 +1,3638 @@
+---
+title: "From clinics to sewers: leveraging environmental surveillance and whole genome sequencing to inform transmission of ESBL-<i>Escherichia coli</i> in Switzerland"
+author: "Sheena Conforti"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    df_print: paged
+    code_folding: hide  # or "show" if you want it open by default
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 2
+    code_folding: hide  # hides code by default, adds toggle
+    number_sections: false
+    df_print: paged
+  pdf_document:
+    keep_tex: true
+---
+
+------------------------------------------------------------------------
+
+# 1. Overview
+
+This R Markdown notebook documents the full analysis pipeline for assessing the genomic diversity, resistance gene content, and phylogenetic relationships of extended-spectrum β-lactamase (ESBL)-producing *Escherichia coli* isolated from wastewater, clinical, livestock, and wildlife sources in Switzerland. The workflow includes:
+
+-   Sequencing Quality and Metadata Integration: Summary of sequencing output, quality control, and sample inclusion criteria (Table S2).
+
+-   Genomic Diversity: Characterization of *E. coli* phylogroups and sequence types (STs) across compartments (Tables S5–S6).
+
+-   Antibiotic Resistance Genes (ARGs): Distribution of β-lactamase and non-β-lactamase ARGs across sources (Table S7, Fig. 3, Fig. S2, Fig. S7), including analyses of multidrug resistance patterns (Table S8) and regional differences in ARG abundance (Table S9, Fig. S3).
+
+-   Genetic Relatedness: SNP-based similarity analysis to identify closely related isolates, within and between compartments, across defined SNP thresholds (Tables S10–S11, Fig. 4).
+
+-   Ancestral State Reconstruction and Transition Analyses: Maximum parsimony-based reconstruction of transmission events between compartments across a consensus tree and 1,000 bootstrap phylogenies. Observed transitions are compared against null distributions generated via randomization (Tables S12–S13, Fig. 5, Fig. S5–S6).
+
+-   ST-Specific and Compartment-Restricted Analyses: Targeted transition analyses are conducted for the five most prevalent STs (ST131, ST10, ST38, ST69, ST1193) and on a subset including only wastewater and clinical isolates to assess directional signals in transmission dynamics.
+
+------------------------------------------------------------------------
+
+# 2. Load packages
+
+If not yet installed, install them using \`install.packages("package_name")\`.
+
+```{r load-packages, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(ggpubr)
+library(tidyr)
+library(seqinr)
+library(readr)
+library(ggthemes)
+library(patchwork)
+library(kableExtra)
+library(FSA)
+library(tibble)
+library(tidyverse)
+library(RColorBrewer)
+library(reshape2)
+library(igraph)
+library(phangorn)
+library(ape)
+library(readxl)
+library(pheatmap)
+```
+
+------------------------------------------------------------------------
+
+# 3. Sequencing results
+
+## 3.1 Load data
+
+```{r load-sequencing, warning=FALSE, error=FALSE, eval=TRUE}
+sequencing <- read.csv("sequencing.csv", header =TRUE)
+```
+
+## 3.2 Sequencing output summary
+
+```{r sequencing-results-analyses, warning=FALSE, message=FALSE, eval=TRUE}
+
+# STEP 0: Standardize naming
+sequencing <- sequencing %>%
+  mutate(
+    Batch = str_trim(Batch),
+    source = case_when(source == "clinical" ~ "clinics", TRUE ~ source)
+  )
+
+# STEP 1: Filter and deduplicate only ESBL-E. coli samples
+esbl <- sequencing %>%
+  filter(sample_type == "esblecoli") %>%
+  select(Sample, Batch, source, Contamination, low_coverage, low_quality_assembly, Final.tree) %>%
+  distinct()
+
+# STEP 2: Per-sample summary
+esbl_summary <- esbl %>%
+  group_by(Sample) %>%
+  summarise(
+    Contamination_flag = any(Contamination == "yes"),
+    low_coverage_flag = any(low_coverage == "yes"),
+    low_quality_flag = any(low_quality_assembly == "yes"),
+    any_clean = any(Contamination == "no" & low_coverage == "no" & low_quality_assembly == "no"),
+    in_final_tree = any(Final.tree == "yes"),
+    source = first(source),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    excluded = !any_clean,
+    exclusion_reason = case_when(
+      excluded & Contamination_flag ~ "Due to contamination",
+      excluded & low_coverage_flag ~ "Due to low coverage",
+      excluded & low_quality_flag ~ "Due to low assembly quality",
+      TRUE ~ NA_character_
+    )
+  )
+
+# STEP 3: Summary counts
+total_n <- nrow(esbl_summary)
+
+total_by_source <- esbl_summary %>%
+  dplyr::count(source) %>%
+  rename(total = n)
+
+final_tree_by_source <- esbl_summary %>%
+  filter(in_final_tree) %>%
+  dplyr::count(source) %>%
+  rename(in_final_tree = n)
+
+excluded_total <- esbl_summary %>%
+  filter(excluded) %>%
+  nrow()
+
+excluded_by_reason <- esbl_summary %>%
+  filter(excluded) %>%
+  dplyr::count(exclusion_reason) %>%
+  rename(reason = exclusion_reason, n = n)
+
+# STEP 4: QC samples by type and batch (correct strain-level)
+neg_controls <- sequencing %>%
+  filter(sample_type == "negative_control") %>%
+  dplyr::count(Batch) %>%
+  rename(n_neg_controls = n)
+
+# Count specific strain types
+count_strain_batch <- function(strain_name) {
+  sequencing %>%
+    filter(sample_type == strain_name) %>%
+    dplyr::count(Batch) %>%
+    complete(Batch = c("batch1", "batch2"), fill = list(n = 0)) %>%
+    pull(n)
+}
+
+# Individual strain counts by batch
+ecoli1_b1 <- count_strain_batch("ecoli_control_strain1")[1]
+ecoli1_b2 <- count_strain_batch("ecoli_control_strain1")[2]
+ecoli2_b1 <- count_strain_batch("ecoli_control_strain2")[1]
+ecoli2_b2 <- count_strain_batch("ecoli_control_strain2")[2]
+
+kleb1_b1 <- count_strain_batch("klebsiella_control_strain1")[1]
+kleb1_b2 <- count_strain_batch("klebsiella_control_strain1")[2]
+kleb2_b1 <- count_strain_batch("klebsiella_control_strain2")[1]
+kleb2_b2 <- count_strain_batch("klebsiella_control_strain2")[2]
+
+# STEP 5: Resequencing outcomes
+low_cov_batch1 <- sequencing %>%
+  filter(sample_type == "esblecoli", low_coverage == "yes", Batch == "batch1") %>%
+  pull(Sample) %>%
+  unique()
+
+rescued_in_batch2 <- sequencing %>%
+  filter(sample_type == "esblecoli", Batch == "batch2", Sample %in% low_cov_batch1,
+         low_coverage == "no", Contamination == "no", low_quality_assembly == "no") %>%
+  pull(Sample) %>%
+  unique()
+
+failed_both_batches <- setdiff(low_cov_batch1, rescued_in_batch2)
+
+# Safe accessor helper
+get_count <- function(df, var, value) {
+  result <- df %>% filter({{ var }} == value) %>% pull(2)
+  if (length(result) == 0) return(0) else return(result)
+}
+
+# STEP 6: Build final summary table
+tableS2 <- tibble(
+  Category = c(
+    "Total unique ESBL-E. coli isolates",
+    "From wastewater",
+    "From clinics",
+    "From cattle",
+    "From wildlife",
+    "Included in final tree (total)",
+    "Included in final tree (wastewater)",
+    "Included in final tree (clinics)",
+    "Included in final tree (cattle)",
+    "Included in final tree (wildlife)",
+    "Excluded from final tree (total)",
+    "Exclusion due to contamination",
+    "Exclusion due to low coverage",
+    "Exclusion due to low assembly quality",
+    "Low coverage in batch1 rescued in batch2",
+    "Low coverage samples that failed both batches",
+    "AE negative control samples in batch1",
+    "AE negative control samples in batch2",
+    "E. coli strain1 in batch1",
+    "E. coli strain1 in batch2",
+    "E. coli strain2 in batch1",
+    "E. coli strain2 in batch2",
+    "Klebsiella strain1 in batch1",
+    "Klebsiella strain1 in batch2",
+    "Klebsiella strain2 in batch1",
+    "Klebsiella strain2 in batch2"
+  ),
+  N = c(
+    total_n,
+    get_count(total_by_source, source, "wastewater"),
+    get_count(total_by_source, source, "clinics"),
+    get_count(total_by_source, source, "cattle"),
+    get_count(total_by_source, source, "wildlife"),
+    sum(esbl_summary$in_final_tree),
+    get_count(final_tree_by_source, source, "wastewater"),
+    get_count(final_tree_by_source, source, "clinics"),
+    get_count(final_tree_by_source, source, "cattle"),
+    get_count(final_tree_by_source, source, "wildlife"),
+    excluded_total,
+    get_count(excluded_by_reason, reason, "Due to contamination"),
+    get_count(excluded_by_reason, reason, "Due to low coverage"),
+    get_count(excluded_by_reason, reason, "Due to low assembly quality"),
+    length(rescued_in_batch2),
+    length(failed_both_batches),
+    get_count(neg_controls, Batch, "batch1"),
+    get_count(neg_controls, Batch, "batch2"),
+    ecoli1_b1, ecoli1_b2,
+    ecoli2_b1, ecoli2_b2,
+    kleb1_b1, kleb1_b2,
+    kleb2_b1, kleb2_b2
+  )
+)
+
+tableS2$N[is.na(tableS2$N)] <- 0
+
+# STEP 7: Display
+tableS2 %>%
+  kable(
+    format = "html",
+    longtable = TRUE,
+    booktabs = TRUE,
+    caption = "Table S2: Comprehensive summary of ESBL-<i>E. coli</i> sequencing outcomes, quality filtering, control types by strain, and resequencing success across batches."
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center"
+  )
+
+# Save the final sequencing summary table
+#write.csv(tableS2, "./tables/TableS2.csv", row.names = FALSE)
+```
+
+------------------------------------------------------------------------
+
+# 4. ESBL-E. coli diversity
+
+## 4.1 Load metadata
+
+```{r upload-metadata, warning=FALSE, message=FALSE, eval=TRUE}
+sample_metadata <- read.csv("sample_annotations.csv", header=TRUE)
+```
+
+## 4.2 Phylogroup diversity
+
+```{r tableS5-phylogroup-summary, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Count total isolates per source for denominator
+source_totals <- sample_metadata %>%
+  filter(Phylogroup != "", Phylogroup != "failed") %>%
+  dplyr::count(Source, name = "total_n") %>%
+  pivot_wider(names_from = Source, values_from = total_n)
+
+total_n <- nrow(sample_metadata %>% filter(Phylogroup != "", Phylogroup != "failed"))
+
+# Table S5 generation
+tableS5 <- sample_metadata %>%
+  filter(Phylogroup != "", Phylogroup != "failed") %>%
+  group_by(Phylogroup) %>%
+  summarise(
+    total = n(),
+    clinical = sum(Source == "clinics"),
+    cattle = sum(Source == "cattle"),
+    wastewater = sum(Source == "wastewater"),
+    wildlife = sum(Source == "wildlife"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    percent_total = round(100 * total / total_n, 1),
+    percent_clinical = round(100 * clinical / source_totals$clinics, 1),
+    percent_cattle = round(100 * cattle / source_totals$cattle, 1),
+    percent_wastewater = round(100 * wastewater / source_totals$wastewater, 1),
+    percent_wildlife = round(100 * wildlife / source_totals$wildlife, 1),
+    `Number (percentage %) of total isolates` = paste0(total, " (", percent_total, "%)"),
+    `Number (percentage %) of clinical isolates` = paste0(clinical, " (", percent_clinical, "%)"),
+    `Number (percentage %) of cattle isolates` = paste0(cattle, " (", percent_cattle, "%)"),
+    `Number (percentage %) of wastewater isolates` = paste0(wastewater, " (", percent_wastewater, "%)"),
+    `Number (percentage %) of wildlife isolates` = paste0(wildlife, " (", percent_wildlife, "%)")
+  ) %>%
+  select(
+    Phylogroup,
+    `Number (percentage %) of total isolates`,
+    `Number (percentage %) of clinical isolates`,
+    `Number (percentage %) of cattle isolates`,
+    `Number (percentage %) of wastewater isolates`,
+    `Number (percentage %) of wildlife isolates`
+  ) %>%
+  arrange(Phylogroup)
+
+# Display Table S5
+tableS5 %>%
+  kable(
+    format = "html",
+    longtable = TRUE,
+    booktabs = TRUE,
+    escape = FALSE,
+    caption = "Table S5: Distribution of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> isolates across nine phylogroups, determined using the EzClermont protocol, stratified by source."
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center"
+  )
+
+# Save to file
+#write.csv(tableS5, "./tables/TableS5.csv", row.names = FALSE)
+
+```
+
+## 4.3 Sequence type (ST) diversity
+
+```{r tableS6-ST-summary, message=FALSE, warning=FALSE, eval=TRUE}
+
+# Generate Table S6: Sequence type distribution by source
+tableS6 <- sample_metadata %>%
+  filter(!is.na(ST), ST != "failed") %>%
+  group_by(ST) %>%
+  dplyr::summarise(
+    total = n(),
+    clinical = sum(Source == "clinics"),
+    cattle = sum(Source == "cattle"),
+    wastewater = sum(Source == "wastewater"),
+    wildlife = sum(Source == "wildlife"),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    percent_total = round(100 * total / total_n, 1),
+    percent_clinical = round(100 * clinical / source_totals$clinics, 1),
+    percent_cattle = round(100 * cattle / source_totals$cattle, 1),
+    percent_wastewater = round(100 * wastewater / source_totals$wastewater, 1),
+    percent_wildlife = round(100 * wildlife / source_totals$wildlife, 1),
+    `Number (percentage %) of total isolates` = paste0(total, " (", percent_total, "%)"),
+    `Number (percentage %) of clinical isolates` = paste0(clinical, " (", percent_clinical, "%)"),
+    `Number (percentage %) of cattle isolates` = paste0(cattle, " (", percent_cattle, "%)"),
+    `Number (percentage %) of wastewater isolates` = paste0(wastewater, " (", percent_wastewater, "%)"),
+    `Number (percentage %) of wildlife isolates` = paste0(wildlife, " (", percent_wildlife, "%)")
+  ) %>%
+  arrange(desc(total)) %>%
+  select(
+    SequenceType = ST,
+    `Number (percentage %) of total isolates`,
+    `Number (percentage %) of clinical isolates`,
+    `Number (percentage %) of cattle isolates`,
+    `Number (percentage %) of wastewater isolates`,
+    `Number (percentage %) of wildlife isolates`
+  )
+
+# Display Table S6
+tableS6 %>%
+  kable(
+    format = "html",
+    longtable = TRUE,
+    booktabs = TRUE,
+    escape = FALSE,
+    caption = "Table S6: Distribution of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> isolates by sequence type (ST), identified by the analysis of seven housekeeping genes of the multilocus sequence typing (MLST) Achtman scheme using MLST v.2.16.1 (https://github.com/tseemann/mlst). The table includes the number and percentage of isolates for each ST."
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center"
+  )
+
+# Save to file
+#write.csv(tableS6, "./tables/TableS6.csv", row.names = FALSE)
+```
+
+------------------------------------------------------------------------
+
+# 5. Antibiotic Resistant Genes (ARGs)
+
+## 5.1 Load ARGs data
+
+```{r import-args-data, message=FALSE, warning=FALSE, eval=TRUE}
+arg_data <- read.delim("args_abricate.txt", header = TRUE, check.names = FALSE)
+arg_class <- read.csv("gene_and_class.csv", header =TRUE)
+```
+
+## 5.2 Format ARGs data
+
+```{r format-args-data, message=FALSE, warning=FALSE, eval=TRUE}
+
+# Rename the first column to "Sample"
+colnames(arg_data)[1] <- "Sample"
+
+# Extract the clean sample names (between last "/" and first "_")
+arg_data$Sample <- gsub("^.*/|_.*$", "", arg_data$Sample)
+
+# Replace "." with NA in gene columns to handle missing values
+arg_data[arg_data == "."] <- NA
+
+
+```
+
+## 5.3 Beta-lactamase genes
+
+### 5.3.1 Filter ARGs data for beta-lactamase genes
+
+```{r filter-args-data-betalactamase, message=FALSE, warning=FALSE, eval=TRUE}
+
+# Find the list of genes that are betalactamase
+betalactamase_genes <- arg_class %>%
+  filter(antibiotic_class == "betalactamase") %>%
+  pull(arg)
+
+# Keep 'Sample' and the betalactamase genes that exist in arg_data
+arg_data_bl <- arg_data %>%
+  select(Sample, any_of(betalactamase_genes))
+```
+
+### 5.3.2 Count isolates with beta-lactamase genes per source
+
+```{r count-betalactamase-source, message=FALSE, warning=FALSE, eval=TRUE}
+
+# Merge the Source column into arg_data_beta
+arg_data_bl <- arg_data_bl %>%
+  left_join(sample_metadata %>% select(Sample, Source), by = "Sample") %>%
+  relocate(Source, .after = Sample)
+
+# Change "livestock" to "cattle"
+arg_data_bl <- arg_data_bl %>%
+  mutate(Source = ifelse(Source == "livestock", "cattle", Source))
+
+# Count number of isolates in each source
+isolates_source <- arg_data_bl %>%
+  dplyr::count(Source, name = "n_isolates")
+
+# Generate counts of beta-lactamase genes per Source
+bl_counts_by_source <- arg_data_bl %>%
+  select(-Sample) %>% 
+  group_by(Source) %>%
+  summarise(across(everything(), ~sum(!is.na(.)), .names = "count_{col}"))
+
+# Make it long format
+bl_counts_by_source <- bl_counts_by_source %>%
+  pivot_longer(-Source, names_to = "Gene", values_to = "Positive_Samples") %>%
+  mutate(Gene = gsub("count_", "", Gene))  
+
+# Calculate proportions based on the number of isolates per Source
+bl_counts_by_source <- bl_counts_by_source %>%
+  left_join(isolates_source, by = "Source") %>%
+  mutate(Proportion = (Positive_Samples / n_isolates) * 100)
+
+# Round the proportion properly
+bl_counts_by_source <- bl_counts_by_source %>%
+  mutate(Proportion = ifelse(Proportion >= 0.1,
+                             round(Proportion, 1),
+                             round(Proportion, 2)))
+
+# Create a combined "n, %" column
+bl_counts_by_source <- bl_counts_by_source %>%
+  mutate(Result = paste0(Positive_Samples, "; ", Proportion, "%"))
+
+# Remove genes with zero Positive_Samples in all sources
+bl_counts_by_source <- bl_counts_by_source %>%
+  group_by(Gene) %>%
+  filter(any(Positive_Samples > 0)) %>%
+  ungroup()
+
+# Pivot wider with the combined result
+table_betalactamase <- bl_counts_by_source %>%
+  select(Source, Gene, Result) %>%
+  pivot_wider(
+    names_from = Source,
+    values_from = Result
+  )
+
+# Rename columns to match your style
+colnames(table_betalactamase) <- gsub("_", " ", colnames(table_betalactamase))
+colnames(table_betalactamase)[-1] <- paste0(colnames(table_betalactamase)[-1], " (n; %)")
+
+# Count unique beta-lactamase genes
+num_unique_genes <- n_distinct(table_betalactamase$Gene)
+cat("Number of unique beta-lactamase genes:", num_unique_genes, "\n")
+
+# Display table
+table_betalactamase %>%
+  kable(
+    format = "html",  # use "latex" if rendering PDF
+    longtable = TRUE,
+    booktabs = TRUE,
+    caption = "Table S7: Distribution of β-lactamase genes among extended-spectrum β-lactamase (ESBL)-producing Escherichia coli isolates from different sources. The table lists detected β-lactamase genes, their presence across sources (clinics, cattle, wastewater, and wildlife), the percentage of isolates carrying each gene, and the corresponding number of isolates. Gene detection was performed by blasting assembled genomes against the Comprehensive Antibiotic Resistance Database (CARD, accessed 4th November 2023) using Abricate v1.0.1."
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center"
+  )
+
+# Save the final betalactamase table to CSV
+#write.csv(table_betalactamase, "./tables/TableS7.csv", row.names = FALSE)
+
+```
+
+### 5.3.3 Heatmap of beta-lactamase genes
+
+```{r plot-figS2, fig.cap = "Fig. S2: Co-occurrence of β-lactamase genes across ESBL-producing *Escherichia coli* isolates stratified by source (clinics, cattle, wastewater, and wildlife). The heatmap displays individual isolates (rows) and β-lactamase genes (columns). Each tile indicates the presence of a specific gene in a given isolate identified using the Comprehensive Antibiotic Resistance Database (CARD). Genes are grouped and color-coded by gene family: CTX-M (orange), TEM (skyblue), SHV (yellow), OXA (red), and Other (grey).", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
+
+
+# Clean data and remove genes with all NAs
+arg_data_bl <- arg_data_bl %>%
+  select(where(~ !all(is.na(.))))
+
+# Pivot to long format and create presence column
+heatmap_long <- arg_data_bl %>%
+  pivot_longer(cols = -c(Sample, Source), names_to = "Gene", values_to = "Value") %>%
+  mutate(Presence = ifelse(is.na(Value), 0, 1))
+
+# Parse gene family (e.g., "CTX" from "CTX-M-15")
+heatmap_long <- heatmap_long %>%
+  mutate(Family = case_when(
+    str_detect(Gene, "^CTX") ~ "CTX",
+    str_detect(Gene, "^TEM") ~ "TEM",
+    str_detect(Gene, "^SHV") ~ "SHV",
+    str_detect(Gene, "^OXA") ~ "OXA",
+    TRUE ~ "Other"
+  ))
+
+# Assign fixed colors by family
+family_colors <- c(
+  "CTX" = "orange",
+  "TEM" = "skyblue",
+  "SHV" = "darkgreen",
+  "OXA" = "#d9381e",
+  "Other" = "grey50"
+)
+
+# Map color to each gene based on family
+gene_colors <- heatmap_long %>%
+  distinct(Gene, Family) %>%
+  mutate(color = family_colors[Family]) %>%
+  select(Gene, color)
+
+# Merge gene colors into main data
+heatmap_long <- left_join(heatmap_long, gene_colors, by = "Gene")
+
+# Sort genes alphabetically
+heatmap_long <- heatmap_long %>%
+  mutate(Gene = factor(Gene, levels = sort(unique(Gene))))
+
+# Prepare legend colors manually for gene families
+legend_family_colors <- c(
+  "CTX-M" = "orange",
+  "TEM" = "skyblue",
+  "SHV" = "darkgreen",
+  "OXA" = "#d9381e",
+  "Other" = "grey50"
+)
+
+# Add legend mapping to heatmap_long
+heatmap_long <- heatmap_long %>%
+  mutate(FamilyLabel = case_when(
+    Family == "CTX" ~ "CTX-M",
+    Family == "TEM" ~ "TEM",
+    Family == "SHV" ~ "SHV",
+    Family == "OXA" ~ "OXA",
+    TRUE ~ "Other"
+  ))
+
+# Plot heatmaps faceted by Source
+figS2 = ggplot(heatmap_long %>% filter(Presence == 1), aes(x = Gene, y = Sample)) +
+  geom_tile(aes(fill = FamilyLabel), color = "grey90") +
+  scale_fill_manual(
+    values = legend_family_colors,
+    name = "Gene family"
+  ) +
+  facet_wrap(~ Source, scales = "free_y", ncol = 2) +
+  theme_bw() +
+theme(
+  axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 10, color = "black"),  # Centered
+  axis.text.y = element_blank(),
+  axis.ticks.y = element_blank(),  # Remove ticks on y-axis
+  axis.title = element_text(size = 14, color = "black"),
+  strip.text = element_text(size = 16),
+  strip.background = element_rect(fill = "white", color = "black"),  # Frame for facet titles
+  panel.grid.major.x = element_line(color = "grey50", linewidth = 0.1, linetype = "dashed"),  # Corrected
+  panel.grid.major.y = element_blank(),
+  panel.grid.minor = element_blank(),
+  legend.position = "bottom",
+  legend.title = element_text(size = 12),
+  legend.text = element_text(size = 11)
+) +
+  labs(
+    title = "",
+    x = "Gene",
+    y = "Isolate"
+  )
+
+print(figS2)
+
+# save figure
+#ggsave("./figures/FigureS2.pdf", plot = figS2, width = 11.69, height = 8.27 , units = "in")
+```
+
+## 5.4 Non-beta-lactamase genes
+
+### 5.4.1 Filter ARGs for non beta-lactamase genes
+
+```{r filter-args-data-non-bl, message=FALSE, warning=FALSE, eval=TRUE}
+
+# Find the list of genes that are betalactamase
+non_bl_genes <- arg_class %>%
+  filter(antibiotic_class != "betalactamase") %>%
+  pull(arg)
+
+# Subset arg_data to include only non-beta-lactamase genes
+arg_data_nonbl <- arg_data %>%
+  select(Sample, any_of(non_bl_genes)) %>%
+  left_join(sample_metadata %>% select(Sample, Source), by = "Sample") %>%
+  relocate(Source, .after = Sample)
+```
+
+### 5.4.2 Count isolates with non-beta-lactamase
+
+```{r count-non-bl-source, message=FALSE, warning=FALSE, eval=TRUE}
+
+# Generate gene counts per source
+gene_counts_nonbl_by_source <- arg_data_nonbl %>%
+  select(-Sample) %>%
+  group_by(Source) %>%
+  summarise(across(everything(), ~sum(!is.na(.)), .names = "count_{col}"))
+
+# Change "livestock" to "cattle"
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  mutate(Source = ifelse(Source == "livestock", "cattle", Source))
+
+# Convert to long format and clean gene names
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  pivot_longer(-Source, names_to = "Gene", values_to = "Positive_Samples") %>%
+  mutate(Gene = gsub("count_", "", Gene))
+
+# Join antibiotic class info
+arg_class_nonbl <- arg_class %>%
+  filter(arg %in% non_bl_genes) %>%
+  rename(Gene = arg, Class = antibiotic_class)
+
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  left_join(arg_class_nonbl, by = "Gene")
+
+# Rename specific gene names in gene_counts_nonbl_by_source$Gene
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  mutate(Gene = recode(Gene,
+    "Acinetobacter_baumannii_AmvA" = "AmvA",
+    "Enterobacter_cloacae_acrA" = "Eclo_acrA",
+    "Enterococcus_faecalis_chloramphenicol_acetyltransferase" = "Efae_ACT_CHL",
+    "Escherichia_coli_ampC1_beta-lactamase" = "ampC1",
+    "Escherichia_coli_ampC" = "ampC",
+    "Escherichia_coli_acrA" = "Ec_acrA",
+    "Escherichia_coli_ampH" = "ampH",
+    "Escherichia_coli_emrE" = "emrE",
+    "Escherichia_coli_mdfA" = "mdfA",
+    "Klebsiella_pneumoniae_KpnF" = "KpnF",
+    "Klebsiella_pneumoniae_KpnH" = "KpnH",
+    "catII_from_Escherichia_coli_K-12" = "catII",
+    "determinant_of_bleomycin_resistance" = "BRP"
+  ))
+
+# Join number of isolates and compute proportion
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  left_join(isolates_source, by = "Source") %>%
+  mutate(Proportion = (Positive_Samples / n_isolates) * 100)
+
+# Round the proportion properly
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  mutate(Proportion = ifelse(Proportion >= 0.1,
+                             round(Proportion, 1),
+                             round(Proportion, 2)))
+
+# Create a combined "n; %" column
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  mutate(Result = paste0(Positive_Samples, "; ", Proportion, "%"))
+
+# Remove genes with zero counts in all sources
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  group_by(Gene) %>%
+  filter(any(Positive_Samples > 0)) %>%
+  ungroup()
+
+# Pivot to wide format
+table_nonbetalactamase <- gene_counts_nonbl_by_source %>%
+  select(Source, Gene, Result) %>%
+  pivot_wider(names_from = Source, values_from = Result)
+
+# Rename columns for readability
+colnames(table_nonbetalactamase) <- gsub("_", " ", colnames(table_nonbetalactamase))
+colnames(table_nonbetalactamase)[-1] <- paste0(colnames(table_nonbetalactamase)[-1], " (n; %)")
+```
+
+### 5.4.3 Plot FigureS7
+
+```{r fig:figureS7, fig.cap = "Fig. S7: Distribution of antibiotic resistance genes across sources in ESBL-producing *E. coli* isolates. This figure shows the proportion of ESBL-*E. coli* isolates carrying genes associated with various antibiotic resistance classes, based on annotations from the Comprehensive Antibiotic Resistance Database (CARD). All resistance genes, excluding β-lactamases, that were detected in at least 5% of isolates from any source are displayed. Each panel represents a different antibiotic class, with colors indicating the sources: clinics (pink), cattle (gold), wildlife (green), and wastewater (blue). Antibiotic resistance classes include aminocoumarins, aminoglycosides, diaminopyrimidines, fluoroquinolones, lincosamides, macrolides, nitroimidazoles, peptides, phenicols, phosphonic acids, rifamycins, sulfonamides, tetracyclines, streptogramins, and disinfectants. When a gene is annotated as conferring resistance to multiple antibiotic classes, it is displayed in all relevant facets. Efflux pumps represent genes conferring resistance to multiple antibiotic classes by actively exporting antibiotics from bacterial cells. Each bar shows the proportion of isolates from a specific source carrying the corresponding gene.", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Expand rows where Class contains multiple values (split on "_")
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  separate_rows(Class, sep = "_")
+
+# Keep only genes detected in at least one isolate from any source
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  group_by(Gene) %>%
+  filter(any(Positive_Samples > 0)) %>%
+  ungroup()
+
+#Keep only genes with ≥5% prevalence in at least one source
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>% group_by(Gene) %>% filter(any    (Proportion >= 5)) %>%ungroup()
+
+# Order genes by highest observed proportion (across all sources)
+gene_order_nonbl <- gene_counts_nonbl_by_source %>%
+  group_by(Gene) %>%
+  summarise(max_prop = max(Proportion, na.rm = TRUE)) %>%
+  arrange(desc(max_prop)) %>%
+  pull(Gene)
+
+# Apply factor order
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  mutate(Gene = factor(Gene, levels = gene_order_nonbl))
+
+# Standardize class names: capitalized and plural
+gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
+  mutate(Class = recode(Class,
+    "macrolide" = "Macrolides",
+    "aminoglycosides" = "Aminoglycosides",
+    "sulfonamides" = "Sulfonamides",
+    "diaminopyrimidine" = "Diaminopyrimidines",
+    "tetracycline" = "Tetracyclines",
+    "fluoroquinolones" = "Fluoroquinolones",
+    "phenicol" = "Phenicols",
+    "lincosamide" = "Lincosamides",
+    "streptogramin" = "Streptogramins",
+    "rifamycin" = "Rifamycins",
+    "phosphonicacid" = "Phosphonic acids",
+    "aminocoumarin" = "Aminocoumarins",
+    "disinfectants" = "Disinfectants",
+    "effluxpump" = "Efflux pumps",
+    "glycopeptide" = "Glycopeptides",
+    "intrinsic" = "E. coli intrinsic genes",
+    "nitroimidazole" = "Nitroimidazoles",
+    "nucleoside" = "Nucleosides",
+    "penam" = "Penams",
+    "peptide" = "Peptide antibiotic"
+  ))
+# Define custom colors
+custom_colors_friendly <- c("clinics"= "#CC79A7", "wastewater" ="#56B4E9", "wildlife" ="#009E73", "cattle"="#F0E442")
+
+# Plot faceted barplot by antibiotic class
+nonbl_plot <- ggplot(gene_counts_nonbl_by_source, aes(y = Proportion, x = Gene, fill = Source)) +
+  geom_bar(stat = "identity", 
+           position = position_dodge(width = 0.7), 
+           width = 0.6) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(hjust = 1, color = "black", size = 8),
+    axis.text.x = element_text(hjust = 1, color = "black", size = 7, angle = 45),
+    axis.title = element_text(size = 12, color = "black"),
+    strip.text = element_text(size = 11),
+    strip.background = element_rect(fill = "white", color = "black"),
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    legend.position = c(0.98, 0.02),
+    legend.justification = c("right", "bottom"),
+    legend.direction = "horizontal",
+    legend.text = element_text(size = 11),
+    legend.title = element_text(size = 11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    y = "Proportion of isolates carrying the gene (%)",
+    x = "",
+    fill = "Source",
+    title = expression("Non-" * beta * "-lactamase resistance genes")
+  ) +
+  scale_fill_manual(values = custom_colors_friendly) +
+  facet_wrap(~ Class, scales = "free_x", ncol = 4)
+
+print(nonbl_plot)
+
+# Save non-beta-lactamase ARGs figure
+#ggsave("./figures/FigureS7.pdf", plot = nonbl_plot, width =11.69 , height =8.27  , units = "in")
+```
+
+### 5.4.5 Filter for clinically relevant non-beta-lactamase
+
+```{r table1-non-beta-lactamase, warning=FALSE, eval=TRUE, message=FALSE}
+
+# Define standardized clinically relevant classes (matching the renamed values)
+clinically_relevant_classes <- c(
+  "macrolide", "aminoglycosides", "sulfonamides",
+  "diaminopyrimidine", "tetracycline", "fluoroquinolones", "phenicol",
+  "lincosamide", "streptogramin", "rifamycin", "phosphonicacid"
+)
+
+# Reshape and filter for clinically relevant classes after splitting class labels
+arg_data_long <- arg_data %>%
+  pivot_longer(cols = -c(Sample, NUM_FOUND), names_to = "Gene", values_to = "Present") %>%
+  filter(!is.na(Present)) %>%
+  left_join(arg_class, by = c("Gene" = "arg")) %>%
+  separate_rows(antibiotic_class, sep = "_") %>%  # Split multi-class labels
+  filter(antibiotic_class %in% clinically_relevant_classes) %>%
+  left_join(sample_metadata %>% select(Sample, Source), by = "Sample")%>%
+  mutate(Source = ifelse(Source == "livestock", "cattle", Source))
+
+# Get number of isolates per source dynamically
+isolates_per_source <- sample_metadata %>%
+  mutate(Source = ifelse(Source == "livestock", "cattle", Source)) %>%
+  dplyr::count(Source, name = "n_isolates") %>%
+  deframe()
+
+# Calculate presence of at least one gene per class per sample
+presence_class <- arg_data_long %>%
+  distinct(Sample, antibiotic_class, Source) %>%
+  group_by(antibiotic_class) %>%
+  summarise(
+    `Total number of isolates` = n_distinct(Sample),
+    `Total percentage of isolates (%)` = round(n_distinct(Sample) / nrow(arg_data) * 100, 1),
+    `% of clinical isolates` = round(sum(Source == "clinics") / isolates_per_source["clinics"] * 100, 1),
+    `% of cattle isolates` = round(sum(Source == "cattle") / isolates_per_source["cattle"] * 100, 1),
+    `% of wastewater isolates` = round(sum(Source == "wastewater") / isolates_per_source["wastewater"] * 100, 1),
+    `% of wildlife isolates` = round(sum(Source == "wildlife") / isolates_per_source["wildlife"] * 100, 1),
+    .groups = "drop"
+  )
+
+# Dynamically rename columns with isolate counts
+colnames(presence_class) <- colnames(presence_class) %>%
+  stringr::str_replace_all(c(
+    "% of clinical isolates" = paste0("% of clinical isolates (n=", isolates_per_source["clinics"], ")"),
+    "% of cattle isolates" = paste0("% of cattle isolates (n=", isolates_per_source["cattle"], ")"),
+    "% of wastewater isolates" = paste0("% of wastewater isolates (n=", isolates_per_source["wastewater"], ")"),
+    "% of wildlife isolates" = paste0("% of wildlife isolates (n=", isolates_per_source["wildlife"], ")")
+  ))
+
+# Clean and format class names
+presence_class <- presence_class %>%
+  mutate(`Drug class` = recode(antibiotic_class,
+    "macrolide" = "Macrolides",
+    "aminoglycosides" = "Aminoglycosides",
+    "sulfonamides" = "Sulfonamides",
+    "diaminopyrimidine" = "Diaminopyrimidines",
+    "tetracycline" = "Tetracyclines",
+    "fluoroquinolones" = "Fluoroquinolones",
+    "phenicol" = "Phenicols",
+    "lincosamide" = "Lincosamides",
+    "streptogramin" = "Streptogramins",
+    "rifamycin" = "Rifamycins",
+    "phosphonicacid" = "Phosphonic acids"
+  )) %>%
+  select(`Drug class`, everything(), -antibiotic_class)
+
+# Display Table 1 with matching layout and caption style
+presence_class %>%
+  kable(
+    format = "html",  # or "latex" depending on output format
+    booktabs = TRUE,
+    longtable = TRUE,
+    caption = "Table 1. Number and percentage of isolates carrying resistance genes for each antibiotic class, with percentages also stratified by source (clinics, cattle, wastewater, and wildlife)."
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "repeat_header"),
+    position = "left",
+    full_width = FALSE
+  )
+
+# Optional: save as CSV
+#write.csv(presence_class, "./tables/Table1.csv", row.names = FALSE)
+```
+
+## 5.5 Plot Figure 3
+
+```{r fig:figure3, fig.cap = "Fig. 3: Distribution of β-lactamase and other antibiotic resistance genes across sources. (A) Proportion of isolates from clinics (pink), cattle (gold), wildlife (green), and wastewater (blue) carrying specific β-lactamase genes, identified using the Comprehensive Antibiotic Resistance Database (CARD). Each bar represents the proportion of isolates within each source harboring the corresponding gene. (B) Proportion of isolates carrying resistance genes from other antibiotic classes, identified using CARD. Only genes present in ≥5% of isolates in at least one source are shown. Antibiotic classes include aminoglycosides, diaminopyrimidines, fluoroquinolones, lincosamides, macrolides, phenicols, phosphonic acids, rifamycins, sulfonamides, tetracyclines, and streptogramins. ermB is displayed in the lincosamides, streptogramins, and macrolides panels because it was annotated as conferring resistance to all three antibiotic classes. For an expanded CARD analysis, see Fig. S4.", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Create new gene order based on maximum prevalence across *any* source
+gene_order <- bl_counts_by_source %>%
+  group_by(Gene) %>%
+  summarise(max_proportion = max(Proportion, na.rm = TRUE)) %>%
+  arrange(desc(max_proportion)) %>%
+  pull(Gene)
+
+# Set gene factor levels
+bl_counts_by_source <- bl_counts_by_source %>%
+  mutate(Gene = factor(Gene, levels = gene_order))
+
+# Define custom colors
+custom_colors_friendly <- c("clinics"= "#CC79A7", "wastewater" ="#56B4E9", "wildlife" ="#009E73", "cattle"="#F0E442")
+
+# Plotting
+bl_plot=ggplot(bl_counts_by_source, aes(y = Proportion, x = Gene, fill = Source)) +
+  geom_bar(stat = "identity", 
+           position = position_dodge(width = 0.7), 
+           width = 0.8) +  # Add black border around bars
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(hjust = 1, color = "black", size = 8, angle = 0),
+    axis.text.x = element_text(hjust = 1, color = "black", size = 8, angle = 45),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    legend.position = "none",
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(y = "Proportion of isolates carrying the gene (%)", x = "", fill = "Source", title = expression(beta * "-lactamase resistance genes")) +
+  scale_fill_manual(values = custom_colors_friendly)
+
+# Define standardized clinically relevant classes (matching the renamed values)
+clinically_relevant_classes <- c(
+  "Macrolides", "Aminoglycosides", "Sulfonamides",
+  "Diaminopyrimidines", "Tetracyclines", "Fluoroquinolones", "Phenicols",
+  "Lincosamides", "Streptogramins", "Rifamycins", "Phosphonic acids"
+)
+
+# Filter dataset to only clinically relevant classes
+gene_counts_nonbl_by_source_relevant <- gene_counts_nonbl_by_source %>%
+  filter(Class %in% clinically_relevant_classes)
+
+#Keep only genes with ≥5% prevalence in at least one source
+gene_counts_nonbl_by_source_relevant <- gene_counts_nonbl_by_source_relevant %>% group_by(Gene) %>% filter(any    (Proportion >= 5)) %>%ungroup()
+
+# Order genes by highest observed proportion (across all sources)
+gene_order_nonbl_clinical <- gene_counts_nonbl_by_source_relevant %>%
+  group_by(Gene) %>%
+  summarise(max_prop = max(Proportion, na.rm = TRUE)) %>%
+  arrange(desc(max_prop)) %>%
+  pull(Gene)
+
+# Apply factor order
+gene_counts_nonbl_by_source_relevant <- gene_counts_nonbl_by_source_relevant %>%
+  mutate(Gene = factor(Gene, levels = gene_order_nonbl_clinical))
+
+# Define custom colors
+custom_colors_friendly <- c("clinics"= "#CC79A7", "wastewater" ="#56B4E9", "wildlife" ="#009E73", "cattle"="#F0E442")
+
+# Plot faceted barplot by antibiotic class
+nonbl_plot_relevant <- ggplot(gene_counts_nonbl_by_source_relevant, aes(y = Proportion, x = Gene, fill = Source)) +
+  geom_bar(stat = "identity", 
+           position = position_dodge(width = 0.7), 
+           width = 0.6) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(hjust = 1, color = "black", size = 8),
+    axis.text.x = element_text(hjust = 1, color = "black", size = 8, angle = 45),
+    axis.title = element_text(size = 12, color = "black"),
+    strip.text = element_text(size = 11),
+    strip.background = element_rect(fill = "white", color = "black"),
+    plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+    legend.position = c(0.98, 0.02),
+    legend.justification = c("right", "bottom"),
+    legend.direction = "horizontal",
+    legend.text = element_text(size = 11),
+    legend.title = element_text(size = 11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    y = "Proportion of isolates carrying the gene (%)",
+    x = "",
+    fill = "Source",
+    title = expression("Non-" * beta * "-lactamase resistance genes")
+  ) +
+  scale_fill_manual(values = custom_colors_friendly,
+  guide = guide_legend(ncol = 2)) +
+  facet_wrap(~ Class, scales = "free_x", ncol = 4)
+
+# Combine your two plots with tags
+figure3 <- bl_plot / nonbl_plot_relevant +
+  plot_layout(heights = c(1, 1)) +
+  plot_annotation(
+    tag_levels = 'A',
+    tag_prefix = "",
+    tag_suffix = ")"
+  ) &
+  theme(
+    plot.margin = margin(5, 5, 5, 5),  # Reduce outer margins
+    legend.margin = margin(t = -5),   # Pull legend closer to plot
+    legend.box.margin = margin(t = -10),  # Remove space between plot and legend
+    legend.spacing.y = unit(0.1, "cm")  # Compress vertical spacing inside legend
+  )
+
+# Print in the notebook
+print(figure3)
+
+# Save as A4 PDF
+##ggsave("./figures/Figure3.pdf", plot = figure3, width = 8.27, height = 11.69, units = "in")
+```
+
+## 5.6 Multidrug resistance
+
+```{r mdr-table, message=FALSE, warning=FALSE, eval=TRUE}
+
+# Define all relevant classes (clinically relevant + betalactamase)
+clinically_relevant_classes <- c(
+  "macrolide", "aminoglycosides", "sulfonamides", "diaminopyrimidine",
+  "tetracycline", "fluoroquinolones", "phenicol", "lincosamide",
+  "streptogramin", "rifamycin", "phosphonicacid", "betalactamase"
+)
+
+# Match class names as in arg_class
+included_classes <- tolower(clinically_relevant_classes)
+
+# Get all relevant genes
+relevant_genes <- arg_class %>%
+  filter(antibiotic_class %in% included_classes) %>%
+  pull(arg)
+
+# Subset full ARG data to relevant genes
+arg_data_mdr <- arg_data %>%
+  select(Sample, any_of(relevant_genes))
+
+# Long format and join classes
+arg_data_long <- arg_data_mdr %>%
+  pivot_longer(-Sample, names_to = "Gene", values_to = "Present") %>%
+  filter(!is.na(Present)) %>%
+  left_join(arg_class, by = c("Gene" = "arg"))
+
+# Count number of unique drug classes per isolate
+mdr_counts <- arg_data_long %>%
+  group_by(Sample) %>%
+  summarise(`Number of drug classes` = n_distinct(antibiotic_class)) %>%
+  ungroup()
+
+# Summarize table
+mdr_summary <- mdr_counts %>%
+  dplyr::count(`Number of drug classes`, name = "Number of isolates") %>%
+  mutate(`Percentage of isolates (%)` = round((`Number of isolates` / nrow(arg_data)) * 100, 1))
+
+# Calculate MDR = 3+ line
+mdr_3plus <- mdr_summary %>%
+  filter(`Number of drug classes` >= 3) %>%
+  summarise(
+    `Number of drug classes` = "MDR = 3",
+    `Number of isolates` = sum(`Number of isolates`),
+    `Percentage of isolates (%)` = round(sum(`Percentage of isolates (%)`), 1)
+  )
+
+# Combine final table
+mdr_final_table <- bind_rows(
+  mdr_summary %>% mutate(`Number of drug classes` = as.character(`Number of drug classes`)),
+  mdr_3plus
+) %>%
+  select(`Number of drug classes`, `Number of isolates`, `Percentage of isolates (%)`)
+
+# Display MDR table with left-aligned caption and white background
+mdr_final_table %>%
+  kable(
+    format = "html",  # use "html" if rendering to HTML instead
+    booktabs = TRUE,
+    longtable = TRUE,
+    caption = "Table S8: Distribution of isolates by number of drug resistance classes. The table shows the number and percentage of isolates resistant to varying numbers of drug classes, based on genes detected from the Comprehensive Antibiotic Resistance Database (CARD, accessed 4th November 2023). Multidrug resistance is abbreviated as “MDR”, and is defined as resistance to three or more classes. Classes considered were: aminoglycosides, β-lactamases, fluoroquinolones, diaminopyrimidines, macrolides, sulfonamides, tetracyclines, phenicols, phosphonic acids, lincosamides, and rifamycins."
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "repeat_header"),
+    position = "left",
+    full_width = FALSE
+  )
+
+# Optional: save as CSV
+#write.csv(mdr_final_table, "./tables/TableS8.csv", row.names = FALSE)
+```
+
+## 5.7 ARGs per region and source
+
+### 5.7.1 Assign region to each sample
+
+```{r rename-region, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Standardize region and source names in sample_metadata
+sample_metadata <- sample_metadata %>%
+  mutate(
+    Region = recode(Region,
+      "lémanique" = "Lake Geneva Region",
+      "Mittelland" = "Midland",
+      "Nordwestschweiz" = "Northwestern Switzerland",
+      "Zürich" = "Zurich",
+      "Ostschweiz" = "Eastern Switzerland",
+      "Zentralschweiz" = "Central Switzerland",
+      "Tessin" = "Ticino"
+    ),
+    Source = ifelse(Source == "livestock", "cattle", Source)
+  )
+
+# Merge ARGs per region
+args_region <- sample_metadata %>%
+  select(Sample, Region, Source) %>%
+  left_join(
+    arg_data %>%
+      mutate(args = rowSums(!is.na(select(., -Sample, -NUM_FOUND)))), 
+    by = "Sample"
+  )
+```
+
+### 5.7.2 Statistical tests
+
+This chunk assesses whether the distribution of antibiotic resistance gene (ARG) counts differs between sources (clinics, cattle, wastewater, wildlife) within each Swiss region using a Kruskal-Wallis test. If the test detects significant differences, pairwise comparisons are performed using Dunn’s test. We apply a global Bonferroni correction across all comparisons (i.e., all regions combined), instead of region-specific corrections, to better control for multiple testing given limited sample size within regions.
+
+```{r args-regions-statistic, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Initialize results storage
+kw_results <- data.frame(Region = character(),
+                         Statistic = numeric(),
+                         p.value = numeric(),
+                         stringsAsFactors = FALSE)
+
+dunn_results <- data.frame(Region = character(),
+                           Comparison = character(),
+                           Z = numeric(),
+                           p.value = numeric(),
+                           p.adjusted = numeric(),
+                           stringsAsFactors = FALSE)
+
+# Loop through each region
+for (region in unique(args_region$Region)) {
+  region_data <- args_region %>% filter(Region == region)
+  region_data$Source <- as.factor(region_data$Source)
+  
+  if (length(unique(region_data$Source)) > 1) {
+    # Kruskal-Wallis test
+    kruskal_test <- kruskal.test(args ~ Source, data = region_data)
+    
+    kw_results <- bind_rows(kw_results, data.frame(
+      Region = region,
+      Statistic = kruskal_test$statistic,
+      p.value = kruskal_test$p.value
+    ))
+    
+    # Dunn's test WITHOUT per-region adjustment
+    dunn_test <- dunnTest(args ~ Source, data = region_data, method = "none") 
+    
+    # Extract results and keep unadjusted p-values
+    dunn_results <- bind_rows(dunn_results,
+      as.data.frame(dunn_test$res) %>%
+        mutate(Region = region) %>%
+        rename(
+          Comparison = Comparison,
+          Z = Z,
+          p.value = P.unadj
+        )
+    )
+  }
+}
+
+# Apply global Bonferroni correction
+dunn_results$p.adjusted <- p.adjust(dunn_results$p.value, method = "bonferroni")
+
+# Remove the 
+dunn_results <- dunn_results[, -which(names(dunn_results) == "P.adj")]
+
+# Format Kruskal-Wallis results
+kw_results_formatted <- kw_results %>%
+  mutate(
+    Region = as.character(Region),
+    Statistic = round(Statistic, 2),
+    `p-value` = round(p.value, 2)
+  ) %>%
+  select(Region, Statistic, `p-value`)
+
+# Format Dunn’s results
+dunn_results_formatted <- dunn_results %>%
+  mutate(
+    Region = as.character(Region),
+    Comparison = as.character(Comparison),
+    Z = round(Z, 2),
+    `p-value` = round(p.value, 2),
+    `p-adjusted` = round(p.adjusted, 2)
+  ) %>%
+  select(Region, Comparison, Z, `p-value`, `p-adjusted`)
+
+# Label Kruskal-Wallis results
+kw_results_formatted_labeled <- kw_results_formatted %>%
+  mutate(Test = "Kruskal-Wallis",
+         Comparison = NA,
+         Z = NA,
+         `p-adjusted` = NA) %>%
+  select(Region, Test, Comparison, Z, Statistic, `p-value`, `p-adjusted`)
+
+# Label Dunn’s test results
+dunn_results_formatted_labeled <- dunn_results_formatted %>%
+  mutate(Test = "Dunn's test",
+         Statistic = NA) %>%
+  select(Region, Test, Comparison, Z, Statistic, `p-value`, `p-adjusted`)
+
+# Combine into one table
+table_s9 <- bind_rows(kw_results_formatted_labeled, dunn_results_formatted_labeled)
+
+# Print table in notebook
+table_s9 %>%
+  kable(
+    format = "html",  # or "html" if rendering to HTML
+    longtable = TRUE,
+    booktabs = TRUE,
+    caption = "Table S9: Statistical analysis of differences in antibiotic resistance genes (ARGs) number among sources within different regions of Switzerland. The first part of the table presents the results of the Kruskal-Wallis test, indicating the chi-square (X²) and p-value for each region: Eastern Switzerland, Midland, Lake Geneva Region, Ticino, and Zurich. The second part of the table shows the results of Dunn’s test with Bonferroni adjustment for pairwise comparisons across all tests, including the Z-score, p-value, and adjusted p-value for each comparison between sources (clinics, cattle, wastewater, and wildlife)."
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center"
+  )
+```
+
+```{r save-tables9, warning=FALSE, message=FALSE, eval=FALSE}
+# Define file path
+#output_path <- "./tables/TableS9.csv"
+
+# Open a connection to the file
+fileConn <- file(output_path, open = "wt")
+
+# Add header line for Kruskal-Wallis section
+writeLines("Kruskal-Wallis test results by region", fileConn)
+writeLines("Region,Statistic,p-value", fileConn)
+write.table(kw_results_formatted, fileConn, sep = ",", row.names = FALSE, col.names = FALSE, append = TRUE)
+
+# Add blank line
+writeLines("\n", fileConn)
+
+# Add header line for Dunn's test section
+writeLines("Dunn's pairwise comparisons with global Bonferroni correction", fileConn)
+writeLines("Region,Comparison,Z,p-value,p-adjusted", fileConn)
+write.table(dunn_results_formatted, fileConn, sep = ",", row.names = FALSE, col.names = FALSE, append = TRUE)
+
+# Close the connection
+close(fileConn)
+```
+
+### 5.7.3 Plot FigureS3
+
+```{r plot-figS3, fig.cap = "Fig. S3: Regional variation in antibiotic resistance genes (ARGs) distribution across clinical, cattle, wastewater, and wildlife sources in Switzerland. Boxplots show the number of ARGs detected per isolate from clinics (pink), cattle (gold), wildlife (green), and wastewater (blue) across regions of Switzerland. Each panel represents a distinct region, and each boxplot reflects the distribution of ARG counts within a specific source in that region. Only sources with at least three isolates per region are included. P-values from the Kruskal-Wallis test are indicated in the bottom left corner of each panel. Significant differences (p-value < 0.05) are marked with *. When p-value = NA, the test was not performed due to the presence of only one source category in that region.", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Define custom colors
+custom_colors_friendly <- c("clinics"= "#CC79A7", "wastewater" ="#56B4E9", "wildlife" ="#009E73", "cattle"="#F0E442")
+
+# Filter data to display boxplot only if there are at least 3 samples
+args_region_filtered <- args_region %>%
+  group_by(Source, Region) %>%
+  filter(n() >= 3)
+
+# Create a label dataframe with Kruskal-Wallis p-values
+kw_labels <- kw_results_formatted %>%
+  mutate(label = ifelse(`p-value` < 0.05,
+                        paste0("p-value = ", `p-value`, "*"),
+                        paste0("p-value = ", `p-value`))) %>%
+  select(Region, label)
+
+# Join with args_region to retain coordinates
+label_coords <- args_region %>%
+  group_by(Region) %>%
+  summarise(x = 0.5, y = - 1) %>% 
+  left_join(kw_labels, by = "Region") %>%
+  mutate(label = ifelse(is.na(label), "p-value = NA", label))
+
+# Create plot
+figS3 <- ggplot(args_region, aes(x = Source, y = args, fill = Source)) +
+  geom_boxplot(data = args_region_filtered, aes(group = interaction(Source, Region)),
+               fill = NA, color = "black", outlier.shape = NA) +
+  geom_jitter(aes(color = Source), width = 0.2, height = 0, alpha = 0.7, size=2) +
+  scale_color_manual(values = custom_colors_friendly) +
+  scale_fill_manual(values = custom_colors_friendly) +
+  facet_wrap(~ Region, ncol = 3) +
+  labs(
+    y = "Number of clinically relevant ARGs",
+    x = NULL,
+    fill = "Source"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(color = "black", size = 14, angle = 45, hjust = 1),
+    axis.text.y = element_text(color = "black", size = 14),
+    axis.title = element_text(size = 16, color = "black"),
+    strip.text = element_text(size = 14),
+    strip.background = element_rect(fill = "white", color = "black"),
+    legend.position = c(0.98, 0.02),
+    legend.justification = c("right", "bottom"),
+    legend.direction = "horizontal",
+    legend.text = element_text(size = 16),
+    legend.title = element_text(size = 16),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  geom_text(data = label_coords, aes(x = x, y = y, label = label),
+            inherit.aes = FALSE,
+            hjust = 0, vjust = 0, size = 4)
+
+
+print(figS3)
+
+# save figure
+#ggsave("./figures/FigureS3.pdf", plot = figS3, width = 11.69, height = 8.27 , units = "in")
+```
+
+------------------------------------------------------------------------
+
+# 6. Genetic similarity SNPs
+
+## 6.1 Load SNPs data
+
+```{r data-snp, warning=FALSE, message=FALSE, eval=TRUE}
+snps_data <- read.table("distances_no_recomb.tab", header = TRUE, sep = "\t", check.names = FALSE)
+```
+
+## 6.2 Format SNP matrix using metadata
+
+```{r rename-data-snp, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Create a lookup vector from Sample_ID to Sample
+name_lookup <- setNames(sample_metadata$Sample, sample_metadata$Sample_ID)
+
+# Extract the matrix from snps_data and set row/column names
+distance_matrix <- as.matrix(snps_data[,-1])  # remove first column
+rownames(distance_matrix) <- snps_data[[1]]
+colnames(distance_matrix) <- snps_data[[1]]
+
+# Rename rows and columns using the lookup
+new_names <- name_lookup[rownames(distance_matrix)]
+
+# Check for any unmatched names
+if (any(is.na(new_names))) {
+  warning("Some Sample_IDs from SNP matrix were not found in sample_metadata!")
+}
+
+# Assign new names
+rownames(distance_matrix) <- new_names
+colnames(distance_matrix) <- new_names
+```
+
+## 6.3 Collapse identical sequences from the same sample
+
+Refined logic for defining isolates collected from the "same sample" (per source):
+
+| Source     | **Rule for grouping isolates**                            |
+|------------|-----------------------------------------------------------|
+| wastewater | Use `Location + Date + Source_detailed`                   |
+| clinics    | Each isolate is from a different sample → no grouping     |
+| cattle     | Only group if `Sample` contains a replicate (e.g., `"r"`) |
+| wildlife   | Only group if `Sample` contains a replicate (e.g., `"r"`) |
+
+```{r collapse-identical-per-sample, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Define Sample_Group using refined rules
+sample_metadata <- sample_metadata %>%
+  mutate(Sample_Group = case_when(
+    Source == "wastewater" ~ paste(Location, Date, Source_detailed, sep = "_"),
+    Source %in% c("cattle", "wildlife") & grepl("r", Sample) ~ gsub("r.*", "", Sample),
+    TRUE ~ Sample  # for clinical and non-replicate animal isolates
+  ))
+
+# Create lookup for sample groups
+sample_groups <- sample_metadata$Sample_Group
+names(sample_groups) <- sample_metadata$Sample
+
+# Convert SNP matrix to long format and filter identical (0 SNP) pairs
+distance_long <- melt(as.matrix(distance_matrix), varnames = c("Isolate1", "Isolate2"), value.name = "SNPs") %>%
+  filter(Isolate1 != Isolate2 & SNPs == 0)
+
+# Add group info and keep pairs from same group
+identical_pairs <- distance_long %>%
+  mutate(Group1 = sample_groups[Isolate1],
+         Group2 = sample_groups[Isolate2]) %>%
+  filter(Group1 == Group2)
+
+# Create undirected graph of identical isolate pairs
+edges <- identical_pairs[, c("Isolate1", "Isolate2")]
+g <- igraph::graph_from_data_frame(edges, directed = FALSE)
+
+# Extract connected components
+clusters <- igraph::components(g)
+
+# Choose one representative per group
+representative_map <- data.frame(Isolate = names(clusters$membership),
+                                 Cluster = clusters$membership) %>%
+  group_by(Cluster) %>%
+  slice(1) %>%
+  ungroup()
+
+# Identify isolates to remove
+all_identical_isolates <- names(clusters$membership)
+representative_isolates <- representative_map$Isolate
+isolates_to_remove <- setdiff(all_identical_isolates, representative_isolates)
+
+#  Optional: collapse the distance matrix
+collapsed_isolates <- setdiff(rownames(distance_matrix), isolates_to_remove)
+distance_matrix_collapsed <- distance_matrix[collapsed_isolates, collapsed_isolates]
+
+# Create full cluster membership mapping
+all_membership <- data.frame(
+  Isolate = names(clusters$membership),
+  Cluster = clusters$membership,
+  stringsAsFactors = FALSE
+)
+
+# Map each removed isolate to its retained representative
+cluster_map <- left_join(all_membership, representative_map, by = "Cluster", suffix = c("_Original", "_Retained"))
+
+# Filter out retained isolates
+tableS14 <- cluster_map %>%
+  filter(Isolate_Original != Isolate_Retained) %>%
+  rename(Removed_Isolate = Isolate_Original, Retained_Isolate = Isolate_Retained)
+
+# Add metadata (Source and Date)
+tableS14 <- tableS14 %>%
+  left_join(sample_metadata, by = c("Removed_Isolate" = "Sample")) %>%
+  select(Removed_Isolate, Retained_Isolate, Source, Date) %>%
+  arrange(Removed_Isolate)
+
+# Clean column names
+colnames(tableS14) <- c("Removed Isolate", "Retained Isolate", "Compartment", "Collection Date")
+
+# Display nicely formatted table
+tableS14 %>%
+  kable(
+    format = "html",
+    longtable = TRUE,
+    booktabs = TRUE,
+    caption = "Table S14: Identical ESBL-<i>E. coli</i> isolates (0 SNPs) originating from the same sample and collapsed into a single representative. For each case, the retained isolate is listed alongside the collapsed identical sequences, source compartment, and collection date. This includes, for example, multiple clonal isolates obtained from the same wildlife or livestock fecal sample, or from the same wastewater sample."
+  ) %>%
+  kable_styling(
+    latex_options = c("hold_position", "repeat_header"),
+    full_width = FALSE,
+    position = "center"
+  )
+
+# Save to file
+#write.csv(tableS14, "./tables/TableS14.csv", row.names = FALSE)
+```
+
+## 6.4 Count clonal pairs
+
+```{r count-genetically-similar-pairs, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Prepare binary matrices for different SNP thresholds
+clonal_pairs_0 <- distance_matrix_collapsed == 0
+clonal_pairs_1_20 <- distance_matrix_collapsed > 0 & distance_matrix_collapsed <= 20
+clonal_pairs_21_100 <- distance_matrix_collapsed > 20 & distance_matrix_collapsed <= 100
+
+# Create compartment vector
+compartment_vector <- sample_metadata$Source
+names(compartment_vector) <- sample_metadata$Sample
+compartment_vector <- compartment_vector[rownames(distance_matrix_collapsed)]
+
+# Function to count clonal pairs
+count_clonal_pairs <- function(clonal_matrix, compartments) {
+  as.data.frame(as.table(clonal_matrix)) %>%
+    filter(!is.na(Freq) & Var1 != Var2 & Freq) %>%
+    mutate(
+      Sample1 = pmin(as.character(Var1), as.character(Var2)),
+      Sample2 = pmax(as.character(Var1), as.character(Var2)),
+      Compartment1 = compartments[Sample1],
+      Compartment2 = compartments[Sample2],
+      Type = ifelse(Compartment1 == Compartment2, "Within", "Between")
+    ) %>%
+    distinct(Sample1, Sample2, .keep_all = TRUE)
+}
+
+# Get clonal pairs for each threshold
+df_0 <- count_clonal_pairs(clonal_pairs_0, compartment_vector)
+df_1_20 <- count_clonal_pairs(clonal_pairs_1_20, compartment_vector)
+df_21_100 <- count_clonal_pairs(clonal_pairs_21_100, compartment_vector)
+
+# Total possible pairs
+compute_within_pairs <- function(vec) {
+  tab <- table(vec)
+  data.frame(
+    Compartment = names(tab),
+    Possible_Pairs = as.numeric((tab * (tab - 1)) / 2)
+  )
+}
+
+compute_between_pairs <- function(vec) {
+  tab <- table(vec)
+  compartments <- names(tab)
+
+  if (length(compartments) < 2) return(data.frame())
+
+  pairs <- t(combn(compartments, 2))  
+
+  data.frame(
+    Compartment1 = pairs[, 1],
+    Compartment2 = pairs[, 2],
+    Possible_Pairs = tab[pairs[, 1]] * tab[pairs[, 2]]
+  )
+}
+
+within_totals <- compute_within_pairs(compartment_vector)
+between_totals <- compute_between_pairs(compartment_vector)
+
+# Summary function
+summary_counts <- function(df, label) {
+  df %>%
+    group_by(Type, Compartment1, Compartment2) %>%
+    summarise(Pairs = n(), .groups = "drop") %>%
+    mutate(SNP_Threshold = label)
+}
+
+# Apply summary
+summary_all <- bind_rows(
+  summary_counts(df_0, "0 SNPs"),
+  summary_counts(df_1_20, "1–20 SNPs"),
+  summary_counts(df_21_100, "21–100 SNPs")
+)
+
+# Total clonal pairs by threshold
+total_clonal_pairs <- summary_all %>%
+  group_by(SNP_Threshold, Type) %>%
+  summarise(Pairs = sum(Pairs), .groups = "drop") %>%
+  pivot_wider(names_from = Type, values_from = Pairs)
+
+# Within-compartment proportions
+within_props <- summary_all %>%
+  filter(Type == "Within") %>%
+  left_join(within_totals, by = c("Compartment1" = "Compartment")) %>%
+  mutate(Percentage = round(100 * Pairs / Possible_Pairs, 2)) %>%
+  select(Compartment = Compartment1, SNP_Threshold, Pairs, Percentage)
+
+# Between-compartment proportions
+summary_all_between_fixed <- summary_all %>%
+  filter(Type == "Between") %>%
+  mutate(
+    Comp1 = pmin(Compartment1, Compartment2),
+    Comp2 = pmax(Compartment1, Compartment2)
+  ) %>%
+  group_by(Comp1, Comp2, SNP_Threshold) %>%
+  summarise(Pairs = sum(Pairs), .groups = "drop")
+
+between_props <- summary_all_between_fixed %>%
+  left_join(between_totals, by = c("Comp1" = "Compartment1", "Comp2" = "Compartment2")) %>%
+  mutate(Percentage = round(100 * Pairs / Possible_Pairs.Freq, 4)) %>%
+  select(
+    Compartment1 = Comp1,
+    Compartment2 = Comp2,
+    SNP_Threshold,
+    Pairs,
+    Percentage
+  ) %>%
+  mutate(SNP_Threshold = factor(SNP_Threshold, levels = c("0 SNPs", "1–20 SNPs", "21–100 SNPs"))) %>%
+  arrange(SNP_Threshold, Compartment1, Compartment2)
+
+# Format Table S10a: Total Clonal Pairs (rounded, as character) 
+tableS10a <- total_clonal_pairs %>%
+  mutate(across(where(is.numeric), ~ as.character(round(., 0)))) %>%
+  pivot_longer(cols = -SNP_Threshold, names_to = "Comparison", values_to = "Pairs") %>%
+  pivot_wider(names_from = SNP_Threshold, values_from = Pairs) %>%
+  select(Comparison, `21–100 SNPs`, `1–20 SNPs`, `0 SNPs`)
+
+# Format Table S10b: Within Compartments (rounded, 2 digits or 4 if <0.01) 
+tableS10b <- within_props %>%
+  select(Compartment, SNP_Threshold, Percentage) %>%
+  pivot_wider(names_from = SNP_Threshold, values_from = Percentage) %>%
+  select(Compartment, `21–100 SNPs`, `1–20 SNPs`, `0 SNPs`) %>%
+  mutate(across(-Compartment, ~ ifelse(. < 0.01, format(round(., 4), nsmall = 4), format(round(., 2), nsmall = 2)))) %>%
+  rename(Comparison = Compartment)
+
+# Format Table S10c: Between Compartments (rounded, as above)
+tableS10c <- between_props %>%
+  mutate(Label = ifelse(
+    is.na(Percentage), NA,
+    ifelse(Percentage < 0.01 & Percentage > 0,
+           paste0(format(Percentage, nsmall = 4), " (n=", Pairs, ")"),
+           paste0(format(round(Percentage, 2), nsmall = 2), " (n=", Pairs, ")"))
+  )) %>%
+  select(Compartment1, Compartment2, SNP_Threshold, Label) %>%
+  pivot_wider(names_from = SNP_Threshold, values_from = Label) %>%
+  mutate(Comparison = paste(Compartment1, Compartment2, sep = " vs ")) %>%
+  select(Comparison, `21–100 SNPs`, `1–20 SNPs`, `0 SNPs`)
+
+# Header rows (also character)
+header_a <- tibble(
+  Comparison = "Number of genetically similar pairs",
+  `21–100 SNPs` = "", `1–20 SNPs` = "", `0 SNPs` = ""
+)
+header_b <- tibble(
+  Comparison = "Percentage of genetically similar pairs within compartments (%)",
+  `21–100 SNPs` = "", `1–20 SNPs` = "", `0 SNPs` = ""
+)
+header_c <- tibble(
+  Comparison = "Percentage of genetically similar pairs between compartments (%)",
+  `21–100 SNPs` = "", `1–20 SNPs` = "", `0 SNPs` = ""
+)
+
+# Combine all tables into a single data frame
+tableS10 <- bind_rows(
+  header_a, tableS10a,
+  header_b, tableS10b,
+  header_c, tableS10c
+)
+
+# Save to file
+#write.csv(tableS10, "./tables/TableS10.csv", row.names = FALSE)
+
+# Display as kable
+tableS10 %>%
+  kable(
+    format = "html",
+    booktabs = TRUE,
+    escape = FALSE,
+    caption = "Table S10: Genetically similar <i>Escherichia coli</i> isolate pairs, including extended-spectrum β-lactamase (ESBL)-producing strains, detected within and between compartments across SNP thresholds (0, 1–20, and 21–100 SNPs). The upper section reports total pair counts by comparison type (within vs. between). The middle and lower sections show the percentage and count (n) of genetically similar pairs within and between compartments, respectively. Percentages are calculated relative to the total number of possible isolate pairs within or between the corresponding compartments. Analysis was performed in R (v4.1.1)."
+  ) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  row_spec(which(tableS10$Comparison %in% c(
+    "Number of genetically similar pairs",
+    "Percentage of genetically similar pairs within compartments (%)",
+    "Percentage of genetically similar pairs between compartments (%)"
+  )), bold = TRUE, background = "#f0f0f0")
+```
+
+## 6.5 Identify 0-SNP isolate pairs
+
+```{r identify-0snps-pairs, warning=FALSE, message=FALSE, eval=TRUE}
+
+# 1. Extract all 0 SNP pairs (unique, off-diagonal)
+zero_snp_pairs <- melt(as.matrix(distance_matrix_collapsed), varnames = c("Isolate1", "Isolate2"), value.name = "SNPs") %>%
+  mutate(Isolate1 = as.character(Isolate1), Isolate2 = as.character(Isolate2)) %>%
+  filter(Isolate1 < Isolate2 & SNPs == 0)
+
+# 2. Add metadata for both isolates
+zero_snp_metadata <- zero_snp_pairs %>%
+  left_join(sample_metadata, by = c("Isolate1" = "Sample")) %>%
+  rename(
+    `Compartment sample 1` = Source,
+    `Date sample 1` = Date,
+    `Region sample 1` = Region
+  ) %>%
+  left_join(sample_metadata, by = c("Isolate2" = "Sample")) %>%
+  rename(
+    `Compartment sample 2` = Source,
+    `Date sample 2` = Date,
+    `Region sample 2` = Region
+  ) %>%
+  select(
+    `Isolate 1` = Isolate1,
+    `Isolate 2` = Isolate2,
+    `Compartment sample 1`,
+    `Compartment sample 2`,
+    `Date sample 1`,
+    `Date sample 2`,
+    `Region sample 1`,
+    `Region sample 2`
+  )
+
+# Clean and reformat date columns
+zero_snp_metadata <- zero_snp_metadata %>%
+  mutate(
+    `Date sample 1` = gsub("_", "/", `Date sample 1`),
+    `Date sample 2` = gsub("_", "/", `Date sample 2`),
+    `Date sample 1` = sub("\\s.*", "", `Date sample 1`),  # remove time from Date 1
+    `Date sample 2` = sub("\\s.*", "", `Date sample 2`)   # remove time from Date 2
+  )
+
+# Identify row indices where the compartments are different
+rows_between_compartments <- which(zero_snp_metadata$`Compartment sample 1` != zero_snp_metadata$`Compartment sample 2`)
+
+# Save as CSV
+#write.csv(zero_snp_metadata, "./tables/TableS11.csv", row.names = FALSE)
+
+# Render the table and apply grey shading to between-compartment rows
+zero_snp_metadata %>%
+  kable(
+    format = "html",
+    booktabs = TRUE,
+    longtable = TRUE,
+    escape = FALSE,
+    caption = "Table S11: Isolate pairs of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> that were genetically identical (0 SNPs). For each pair, the source compartment, sampling date, and region are shown. The table includes both within-compartment and between-compartment matches; rows shaded in gray represent isolate pairs originating from different compartments."
+  ) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  row_spec(rows_between_compartments, background = "green")
+```
+
+## 6.6 Plot Figure 4
+
+```{r fig:figure4, fig.cap = "Fig. 4: Percentage of genetically similar ESBL-*Escherichia coli* isolate pairs within and between compartments across SNPs thresholds. Diagonal cells represent within-compartment percentages; off-diagonal cells represent between-compartment percentages. White tiles indicate unobserved or zero values.", fig.height = 7, fig.width = 10, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Prepare diagonal from within_props
+within_diag <- within_props %>%
+  transmute(
+    Compartment1 = Compartment,
+    Compartment2 = Compartment,
+    SNP_Threshold,
+    Percentage
+  )
+
+# Combine with between_props
+all_compartments <- c("clinics", "wastewater", "cattle", "wildlife")
+all_thresholds <- c("0 SNPs", "1–20 SNPs", "21–100 SNPs")
+combined_heatmap_data <- bind_rows(between_props, within_diag) %>%
+  mutate(
+    Compartment1 = factor(Compartment1, levels = all_compartments),
+    Compartment2 = factor(Compartment2, levels = all_compartments),
+    SNP_Threshold = factor(SNP_Threshold, levels = all_thresholds)
+  )
+
+# Create full grid (to show white tiles for missing combinations)
+full_grid <- expand.grid(
+  Compartment1 = all_compartments,
+  Compartment2 = all_compartments,
+  SNP_Threshold = all_thresholds,
+  stringsAsFactors = FALSE
+)
+
+combined_heatmap_data_complete <- full_grid %>%
+  left_join(combined_heatmap_data, by = c("Compartment1", "Compartment2", "SNP_Threshold")) %>%
+  mutate(
+    Compartment1 = factor(Compartment1, levels = all_compartments),
+    Compartment2 = factor(Compartment2, levels = all_compartments),
+    SNP_Threshold = factor(SNP_Threshold, levels = all_thresholds)
+  )
+
+# Plot single heatmap with diagonal filled
+figure4 <- ggplot(combined_heatmap_data_complete, aes(x = Compartment1, y = Compartment2, fill = Percentage)) +
+  geom_tile() +
+  facet_wrap(~ SNP_Threshold) + scale_fill_viridis_c(option = "C", na.value = "white")+
+  labs(fill = "Percentage of\ngenetically similar\npairs (%)") +
+  theme_bw() +
+  theme(
+    text = element_text(family = "sans"),
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 14),
+    axis.text.x = element_text(color = "black", size = 14, angle = 45, hjust = 1),
+    axis.text.y = element_text(color = "black", size = 14),
+    strip.background = element_rect(fill = "white", color = "black"),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14),
+  )
+
+# Save Figure 4
+#ggsave("./figures/Figure4.pdf", plot = figure4, device = cairo_pdf, width = 11.69, height = 8.27)
+
+# Display plot
+print(figure4)
+```
+
+------------------------------------------------------------------------
+
+# 7. Transition analysis
+
+This section presents the complete workflow for ancestral state reconstruction and transition analysis of 762 ESBL-producing *Escherichia coli* isolates collected in Switzerland from four sources: cattle, wildlife, clinical settings, and wastewater. The analysis uses maximum parsimony applied to phylogenetic trees to infer ancestral origins and quantify directional transitions between sources. Observed transitions are then compared to randomized null models to assess whether any directional patterns deviate from expectation.
+
+The notebook is structured as follows:
+
+-   Reproduction of all figures based on pre-generated results for immediate viewing.
+
+-   Ancestral state reconstruction and transition analysis on the consensus phylogenetic tree.
+
+-   Bootstrap-based transition analysis using 1000 bootstrap trees to account for phylogenetic uncertainty.
+
+-   ST-specific transition analysis for dominant sequence types (ST131, ST10, ST38, ST69, ST1193), using the same bootstrap framework.
+
+Note: Pre-generated data are loaded at the start for rapid reproduction of outputs. All steps can be fully re-executed in later sections to regenerate or update results.
+
+## 7.1 Reproduce figures
+
+This section loads previously computed outputs and uses them to recreate the main plots, without recomputing any randomizations or reconstructions. For full reproducibility, see Section 7.4, 7.5, and 7.6.
+
+### 7.1.1 Load pre-generated data
+
+```{r import-pre-generated-data, warning=FALSE, eval=TRUE}
+# Full tree - bootstrap analysis
+combined_results <- read.csv("parsimony/bootstrap_MP_significance_results.csv")
+all_random_counts <- readRDS("parsimony/all_random_counts.rds")
+significance_summary <- read.csv("parsimony/significance_summary_across_trees.csv")
+
+# ST-specific tree - bootstrap analysis
+combined_results_st131 <- read.csv("parsimony/bootstrap_MP_significance_results_st131.csv")
+all_random_counts_st131 <- readRDS("parsimony/all_random_counts_st131.rds")
+significance_summary_st131 <- read.csv("parsimony/significance_summary_across_trees_ST131.csv")
+
+combined_results_st10 <- read.csv("parsimony/bootstrap_MP_significance_results_st10.csv")
+all_random_counts_st10 <- readRDS("parsimony/all_random_counts_st10.rds")
+significance_summary_st10 <- read.csv("parsimony/significance_summary_across_trees_ST10.csv")
+
+combined_results_st38 <- read.csv("parsimony/bootstrap_MP_significance_results_st38.csv")
+all_random_counts_st38 <- readRDS("parsimony/all_random_counts_st38.rds")
+significance_summary_st38 <- read.csv("parsimony/significance_summary_across_trees_ST38.csv")
+
+combined_results_st69 <- read.csv("parsimony/bootstrap_MP_significance_results_st69.csv")
+all_random_counts_st69 <- readRDS("parsimony/all_random_counts_st69.rds")
+significance_summary_st69 <- read.csv("parsimony/significance_summary_across_trees_ST69.csv")
+
+combined_results_st1193 <- read.csv("parsimony/bootstrap_MP_significance_results_st1193.csv")
+all_random_counts_st1193 <- readRDS("parsimony/all_random_counts_st1193.rds")
+significance_summary_st1193 <- read.csv("parsimony/significance_summary_across_trees_ST1193.csv")
+
+# Consensus tree data
+all_transitions <- readRDS("parsimony/randomization_consensus.rds")
+transitions_observed <- read.csv("parsimony/counted_consensus.csv")
+
+# Wastewater and clinical isolates tree - bootstrap analysis
+combined_results_wwc <- read.csv("parsimony/bootstrap_MP_significance_results_wwc.csv")
+all_random_counts_wwc <- readRDS("parsimony/all_random_counts_wwc.rds")
+significance_summary_wwc <- read.csv("parsimony/significance_summary_across_trees_wwc.csv")
+
+#ST-specific wastewater and clinical isolates only - bootstrap analysis
+combined_results_wwc_st131 <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST131.csv")
+combined_results_wwc_st10  <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST10.csv")
+combined_results_wwc_st38  <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST38.csv")
+combined_results_wwc_st69  <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST69.csv")
+combined_results_wwc_st1193 <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST1193.csv")
+
+all_random_counts_wwc_st131 <- readRDS("parsimony/all_random_counts_WWC_ST131.rds")
+all_random_counts_wwc_st10  <- readRDS("parsimony/all_random_counts_WWC_ST10.rds")
+all_random_counts_wwc_st38  <- readRDS("parsimony/all_random_counts_WWC_ST38.rds")
+all_random_counts_wwc_st69  <- readRDS("parsimony/all_random_counts_WWC_ST69.rds")
+all_random_counts_wwc_st1193 <- readRDS("parsimony/all_random_counts_WWC_ST1193.rds")
+
+significance_summary_wwc_st131 <- read.csv("parsimony/significance_summary_across_trees_WWC_ST131.csv")
+significance_summary_wwc_st10  <- read.csv("parsimony/significance_summary_across_trees_WWC_ST10.csv")
+significance_summary_wwc_st38  <- read.csv("parsimony/significance_summary_across_trees_WWC_ST38.csv")
+significance_summary_wwc_st69  <- read.csv("parsimony/significance_summary_across_trees_WWC_ST69.csv")
+significance_summary_wwc_st1193 <- read.csv("parsimony/significance_summary_across_trees_WWC_ST1193.csv")
+```
+
+### 7.1.2 Format pre-generated data
+
+This section prepares the Z-score matrices used to assess how far each observed transition count deviates from its null distribution, computed across bootstrap trees. These values allow us to quantify whether a given transition occurs more or less frequently than expected by chance.
+
+We apply a helper function `compute_z_scores()` to: *i)* Filter out transitions that were never observed, *ii)* Compute Z-scores per transition and per tree, *iii)* Return a unified data frame with `Transition`, `Z_score`, and `Tree` .
+
+```{r format-pre-generated-data, warning=FALSE, eval=TRUE}
+
+# Helper function to compute z-scores from observed and randomized transition data
+compute_z_scores <- function(combined_results, all_random_counts) {
+  nonzero_transitions <- combined_results %>%
+    group_by(Transition) %>%
+    summarise(sum_obs = sum(Observed)) %>%
+    filter(sum_obs > 0) %>%
+    pull(Transition)
+
+  combined_results <- combined_results %>%
+    filter(Transition %in% nonzero_transitions)
+
+  transition_labels <- nonzero_transitions
+
+  z_scores <- lapply(seq_along(all_random_counts), function(i) {
+    tree_name <- paste0("Tree_", i)
+    null_matrix <- all_random_counts[[tree_name]][, transition_labels, drop = FALSE]
+
+    rand_mean <- colMeans(null_matrix)
+    rand_sd <- apply(null_matrix, 2, sd)
+
+    observed_df <- combined_results %>%
+      filter(Tree == tree_name, Transition %in% transition_labels) %>%
+      arrange(match(Transition, transition_labels)) %>%
+      pull(Observed)
+
+    data.frame(
+      Tree = tree_name,
+      Transition = transition_labels,
+      Z_score = (observed_df - rand_mean) / rand_sd
+    )
+  }) %>% bind_rows()
+
+  z_scores$Transition <- gsub("_to_", " to ", z_scores$Transition)
+  return(z_scores)
+}
+```
+
+We apply the function to each dataset:
+
+```{r apply-function-1, warning=FALSE, eval=TRUE}
+z_scores        <- compute_z_scores(combined_results, all_random_counts)
+z_scores_st131  <- compute_z_scores(combined_results_st131, all_random_counts_st131)
+z_scores_st10   <- compute_z_scores(combined_results_st10, all_random_counts_st10)
+z_scores_st38   <- compute_z_scores(combined_results_st38, all_random_counts_st38)
+z_scores_st69   <- compute_z_scores(combined_results_st69, all_random_counts_st69)
+z_scores_st1193 <- compute_z_scores(combined_results_st1193, all_random_counts_st1193)
+z_scores_wwc        <- compute_z_scores(combined_results_wwc, all_random_counts_wwc)
+z_scores_wwc_st131 <- compute_z_scores(combined_results_wwc_st131, all_random_counts_wwc_st131)
+z_scores_wwc_st10  <- compute_z_scores(combined_results_wwc_st10,  all_random_counts_wwc_st10)
+z_scores_wwc_st38  <- compute_z_scores(combined_results_wwc_st38,  all_random_counts_wwc_st38)
+z_scores_wwc_st69  <- compute_z_scores(combined_results_wwc_st69,  all_random_counts_wwc_st69)
+z_scores_wwc_st1193 <- compute_z_scores(combined_results_wwc_st1193, all_random_counts_wwc_st1193)
+
+# Load consensus tree observed transition matrix for histogram plots
+observed_vector <- as.vector(as.matrix(transitions_observed))
+```
+
+### 7.1.3 Plot Figure 5
+
+This chunk creates a multi-panel boxplot showing the Z-score distributions of transition frequencies for the full tree and ST-specific subsets. Each box represents the distribution across 1000 bootstrap trees. The ±1.96 lines represent the 95% confidence interval threshold.
+
+```{r fig:figure5, fig.cap = "Fig. 5: Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for the full dataset and dominant sequence types (STs). Transitions between collection sources (clinics, wastewater, wildlife, cattle) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (full dataset and the five dominant STs: ST131, ST10, ST38, ST69, ST1193). The legend shows the number of isolates retained in the analysis for each ST. Red dashed lines indicate ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.",fig.height=10, fig.width=8, fig.lp=NULL, warning=FALSE, eval=TRUE}
+
+# Add group labels
+z_scores$Group <- "Full tree"
+z_scores_st131$Group <- "ST131"
+z_scores_st10$Group <- "ST10"
+z_scores_st38$Group <- "ST38"
+z_scores_st69$Group <- "ST69"
+z_scores_st1193$Group <- "ST1193"
+
+# Combine data
+z_scores_combined <- bind_rows(z_scores, z_scores_st131, z_scores_st10, z_scores_st38, z_scores_st69, z_scores_st1193)
+
+# Rename "livestock" to "cattle" in transition labels before formatting
+z_scores_combined$Transition <- gsub("livestock", "cattle", z_scores_combined$Transition)
+
+# Clean up and format transition labels
+z_scores_combined$Transition <- gsub("_to_", " → ", z_scores_combined$Transition)
+
+# Ensure transitions and group order
+z_scores_combined$Transition <- factor(z_scores_combined$Transition,
+                                       levels = rev(sort(unique(z_scores_combined$Transition))))
+z_scores_combined$Group <- factor(z_scores_combined$Group, levels = c("ST1193", "ST69", "ST38", "ST10","ST131", "Full tree"))
+
+# Ensure every combination is represented
+z_scores_combined_full <- expand.grid(
+  Transition = unique(z_scores_combined$Transition),
+  Group = levels(z_scores_combined$Group)
+) %>%
+  left_join(z_scores_combined, by = c("Transition", "Group"))
+
+# Order transitions and group
+z_scores_combined_full$Transition <- factor(z_scores_combined_full$Transition,
+                                            levels = rev(sort(unique(z_scores_combined_full$Transition))))
+z_scores_combined_full$Group <- factor(z_scores_combined_full$Group,
+                                       levels = c("ST1193","ST69","ST38", "ST10", "ST131", "Full tree"))
+
+# Get unique levels of transitions
+trans_levels <- levels(z_scores_combined_full$Transition)
+
+# Determine where to place lines (between factors, i.e., at integer positions)
+vline_positions <- seq(1.5, length(trans_levels) - 0.5, by = 1)
+
+# Plot
+figure5 = ggplot(z_scores_combined_full, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
+  geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.1),
+               outlier.shape = NA, width = 1, linewidth = 0.2) +
+  geom_hline(yintercept = c(-1.96, 1.96), linetype = "dashed", color = "red", linewidth = 0.4) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("Full tree" = "skyblue", "ST131" = "#f7d080", "ST10" = "#f0bd9bff", 
+               "ST38" = "#ab7d5dff", "ST69" = "#afbf8dff", "ST1193" = "#9cafaaff"),
+    labels = c("Full tree" = "Full tree (n=762)", 
+               "ST131" = "ST131 (n=197)", 
+               "ST10" = "ST10 (n=66)", 
+               "ST38" = "ST38 (n=55)", 
+               "ST69" = "ST69 (n=53)", 
+               "ST1193" = "ST1193 (n=44)")
+  ) +
+  scale_color_manual(
+    values = c("Full tree" = "#3399cc", "ST131" = "#d6b060", "ST10" = "#d09b79", 
+               "ST38" = "#8c6249", "ST69" = "#8e9e6d", "ST1193" = "#7c8e8a"),
+    labels = c("Full tree" = "Full tree (n=762)", 
+               "ST131" = "ST131 (n=197)", 
+               "ST10" = "ST10 (n=66)", 
+               "ST38" = "ST38 (n=55)", 
+               "ST69" = "ST69 (n=53)", 
+               "ST1193" = "ST1193 (n=44)")
+  ) +
+  guides(
+    fill = guide_legend(title = "Dataset (n of isolates)", reverse = TRUE),
+    color = guide_legend(title = "Dataset (n of isolates)", reverse = TRUE)
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 12, color = "black"),
+    axis.text.x = element_text(size = 12, color = "black"),
+    axis.title = element_text(size = 14, color = "black"),
+    legend.position = "bottom",
+    legend.justification = "center",
+    legend.box = "horizontal",
+    legend.text = element_text(size = 12, color = "black"),     
+    legend.title = element_text(size = 12, color = "black"),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank()   
+  ) +
+  geom_vline(xintercept = vline_positions, linetype = "solid", color = "black", size = 0.2)
+
+# Print the plot to the notebook
+print(figure5)
+
+# Save as PDF in A4 portrait format
+#ggsave("figures/Figure5.pdf", plot = figure5, width = 8.27, height = 11.69, units = "in")
+```
+
+### 7.1.4 Plot Figure S4
+
+This chunk visualizes the null distributions of transitions from the consensus tree randomization. Histograms show how often each transition count occurred under 1000 random permutations, with red and dashed black lines marking the observed count and 95% confidence intervals, respectively.
+
+```{r fig:figureS4, fig.cap = "Fig. S4: Distribution of observed and randomized transition counts on the consensus phylogeny. Transitions between collection sources (clinics, wastewater, wildlife, cattle) were inferred using maximum parsimony ancestral state reconstruction on the consensus maximum likelihood phylogenetic tree of 762 isolates. For each transition type, tip states were randomized 1,000 times (preserving source frequencies) to generate null distributions of transition counts. Each facet shows the distribution of transition counts from the null model (histogram) for a specific transition type. Solid red lines indicate the observed number of transitions; dashed black lines mark the central 95% confidence interval from the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2).", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, eval=TRUE}
+
+# Convert randomizations to long format
+transitions_long <- as.data.frame(all_transitions) %>%
+  mutate(Replicate = 1:nrow(.)) %>%
+  pivot_longer(cols = -Replicate, names_to = "Transition", values_to = "Count")
+
+# Prepare observed data and 95% CI
+ci_data <- apply(all_transitions, 2, quantile, probs = c(0.025, 0.975))
+ci_df <- data.frame(
+  Transition = colnames(all_transitions),
+  CI_Lower = ci_data[1, ],
+  CI_Upper = ci_data[2, ],
+  Original_Count = as.vector(observed_vector)
+)
+
+# Exclude self-transitions
+exclude_self <- c("clinics_to_clinics", "cattle_to_cattle", 
+                  "wastewater_to_wastewater", "wildlife_to_wildlife")
+
+transitions_long <- filter(transitions_long, !Transition %in% exclude_self)
+ci_df <- filter(ci_df, !Transition %in% exclude_self)
+
+# Prettify transition labels
+transitions_long$Transition <- gsub("_", " ", transitions_long$Transition)
+ci_df$Transition <- gsub("_", " ", ci_df$Transition)
+
+# Plot
+figureS4 = ggplot(transitions_long, aes(x = Count)) +
+  geom_histogram(binwidth = 1, fill = "gray70", color = "gray70", boundary = 1) +
+  geom_vline(data = ci_df, aes(xintercept = CI_Lower, linetype = "95% CI"), color = "black", linewidth = 0.5) +
+  geom_vline(data = ci_df, aes(xintercept = CI_Upper, linetype = "95% CI"), color = "black", linewidth = 0.5) +
+  geom_vline(data = ci_df, aes(xintercept = Original_Count, linetype = "# observed transition events"), color = "red", linewidth = 0.6) +
+  scale_linetype_manual(values = c("95% CI" = "dashed", "# observed transition events" = "solid")) +
+  labs(x = "Count", y = "Frequency") +
+  facet_wrap(~ Transition, scales = "free", ncol = 3) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(size = 10, face = "bold"),
+    strip.background = element_rect(fill = "white", color = "black"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.text = element_text(size = 10, color = "black"),     
+    legend.title = element_text(size = 10, color = "black"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10, color = "black"),
+    panel.spacing = unit(1, "lines")
+  ) +
+  guides(linetype = guide_legend(
+    title = "Reference lines", 
+    override.aes = list(color = c("red", "black"))))
+
+# Print the plot to the notebook
+print(figureS4)
+
+# Save as PDF in A4 portrait format
+#ggsave("figures/FigureS4.pdf", plot = figureS4, width = 8.27, height = 11.69, units = "in")
+```
+
+### 7.1.5 Plot Figure S5
+
+This chunk combines Z-scores from the full wastewater and clinical isolates dataset and all major STs (restricted to wastewater and clinical sources) into a single, comparative visualization. Each boxplot shows the distribution of Z-scores across bootstrap trees for a specific transition. Red dashed lines mark the ±1.96 threshold, indicating 95% confidence bounds under the null model. `eval = FALSE` is set below to avoid re-running the code for plotting, as the figure has already been generated in Section 6.5. You can re-enable evaluation if you wish to regenerate the plot or apply modifications.
+
+```{r fig:figureS5, fig.cap = "Fig. S5: Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for wastewater and clinical isolates (WWC). Transitions between collection sources (clinics, wastewater) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees, considering only isolates from wastewater and clinical sources. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (WWC-only full dataset and the five dominant sequence types: ST131, ST10, ST38, ST69, ST1193, all restricted to WWC isolates). The legend indicates the number of isolates retained in each subset. Red dashed lines mark ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=8, fig.width=10, fig.lp=NULL, warning=FALSE, eval=TRUE}
+
+# Add group labels
+z_scores_wwc$Group <- "Wastewater and clinical isolates"
+z_scores_wwc_st131$Group <- "ST131"
+z_scores_wwc_st10$Group <- "ST10"
+z_scores_wwc_st38$Group <- "ST38"
+z_scores_wwc_st69$Group <- "ST69"
+z_scores_wwc_st1193$Group <- "ST1193"
+
+# Combine data
+z_scores_combined_wwc <- bind_rows(z_scores_wwc, z_scores_wwc_st131, z_scores_wwc_st10, z_scores_wwc_st38, z_scores_wwc_st69, z_scores_wwc_st1193)
+
+# Rename "livestock" to "cattle" in transition labels before formatting
+z_scores_combined_wwc$Transition <- gsub("livestock", "cattle", z_scores_combined_wwc$Transition)
+
+# Clean up and format transition labels
+z_scores_combined_wwc$Transition <- gsub("_to_", " → ", z_scores_combined_wwc$Transition)
+
+# Ensure transitions and group order
+z_scores_combined_wwc$Transition <- factor(z_scores_combined_wwc$Transition,
+                                       levels = rev(sort(unique(z_scores_combined_wwc$Transition))))
+z_scores_combined_wwc$Group <- factor(z_scores_combined_wwc$Group, levels = c("ST1193", "ST69", "ST38", "ST10","ST131", "Wastewater and clinical isolates"))
+
+# Ensure every combination is represented
+z_scores_combined_full_wwc <- expand.grid(
+  Transition = unique(z_scores_combined_wwc$Transition),
+  Group = levels(z_scores_combined_wwc$Group)
+) %>%
+  left_join(z_scores_combined_wwc, by = c("Transition", "Group"))
+
+
+# Order transitions and group
+z_scores_combined_full_wwc$Transition <- factor(z_scores_combined_full_wwc$Transition,
+                                            levels = rev(sort(unique(z_scores_combined_full_wwc$Transition))))
+z_scores_combined_full_wwc$Group <- factor(z_scores_combined_full_wwc$Group,
+                                       levels = c("ST1193","ST69","ST38", "ST10", "ST131", "Wastewater and clinical isolates"))
+
+# Get unique levels of transitions
+trans_levels <- levels(z_scores_combined_full_wwc$Transition)
+
+# Determine where to place lines (between factors, i.e., at integer positions)
+vline_positions <- seq(1.5, length(trans_levels) - 0.5, by = 1)
+
+# Plot
+figureS5 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
+  geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.1),
+               outlier.shape = NA, width = 1, linewidth = 0.2) +
+  geom_hline(yintercept = c(-1.96, 1.96), linetype = "dashed", color = "red", linewidth = 0.4) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("Wastewater and clinical isolates" = "skyblue", "ST131" = "#f7d080", "ST10" = "#f0bd9bff", 
+               "ST38" = "#ab7d5dff", "ST69" = "#afbf8dff", "ST1193" = "#9cafaaff"),
+    labels = c("Wastewater and clinical isolates" = "WWC (n=708)", 
+               "ST131" = "ST131 (n=194)", 
+               "ST10" = "ST10 (n=60)", 
+               "ST38" = "ST38 (n=49)", 
+               "ST69" = "ST69 (n=52)", 
+               "ST1193" = "ST1193 (n=44)")
+  ) +
+  scale_color_manual(
+    values = c("Wastewater and clinical isolates" = "#3399cc", "ST131" = "#d6b060", "ST10" = "#d09b79", 
+               "ST38" = "#8c6249", "ST69" = "#8e9e6d", "ST1193" = "#7c8e8a"),
+    labels = c("Wastewater and clinical isolates" = "WWC (n=708)", 
+               "ST131" = "ST131 (n=194)", 
+               "ST10" = "ST10 (n=60)", 
+               "ST38" = "ST38 (n=49)", 
+               "ST69" = "ST69 (n=52)", 
+               "ST1193" = "ST1193 (n=44)")
+  ) +
+  guides(
+    fill = guide_legend(title = "Dataset (n of isolates)", reverse = TRUE),
+    color = guide_legend(title = "Dataset (n of isolates)", reverse = TRUE)
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 12, color = "black"),
+    axis.text.x = element_text(size = 12, color = "black"),
+    axis.title = element_text(size = 14, color = "black"),
+    legend.position = "bottom",
+    legend.justification = "center",
+    legend.box = "horizontal",
+    legend.text = element_text(size = 12, color = "black"),     
+    legend.title = element_text(size = 12, color = "black"),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank()   
+  ) +
+  geom_vline(xintercept = vline_positions, linetype = "solid", color = "black", size = 0.2)
+
+# Print the plot to the notebook
+print(figureS5)
+
+# Save as PDF in A4 portrait format
+ggsave("figures/FigureS5.pdf", plot = figureS5, width = 11.69, height = 8.27, units = "in")
+```
+
+## 7.2 Consensus tree analysis
+
+This section documents the complete re-execution of the ancestral state reconstruction and transition analysis on the consensus phylogeny and on the 1000 bootstrap trees using maximum parsimony. It includes:
+
+-   Loading trees and metadata
+
+-   Inferring ancestral source states
+
+-   Counting transitions between sources
+
+-   Generating randomized null models for comparison
+
+-   Assessing the statistical significance of observed transitions
+
+### 7.2.1 Load tree and metadata
+
+This step loads the consensus phylogenetic tree, 1000 bootstrap trees, and associated metadata. Only samples present in the tree are retained. The outgroup (*Escherichia albertii*) is excluded from all trees.
+
+```{r load trees and metadata, warning=FALSE, eval=TRUE}
+
+# Load required data
+tree <- read.tree("tree.treefile")
+metadata <- read.csv("sample_annotations.csv", header =TRUE)
+
+# Drop outgroup from the consensus tree
+tree <- drop.tip(tree, "Escherichia_albertii")
+
+# Filter metadata for tips present in the tree
+tip_states <- metadata[metadata$Sample_ID %in% tree$tip.label, ] 
+
+# Create named vector of states
+states <- tip_states$Source
+names(states) <- tip_states$Sample_ID  
+states <- states[tree$tip.label] 
+```
+
+### 7.2.2 Define transition counting function
+
+This helper function counts source transitions along the tree based on inferred ancestral states.
+
+```{r define-functions, eval=TRUE}
+count_transitions_parsimony <- function(tree, tip_states, anc_states_names) {
+  state_levels <- levels(tip_states)
+  transitions <- matrix(0, nrow = length(state_levels), ncol = length(state_levels),
+                        dimnames = list(state_levels, state_levels))
+  for (i in 1:nrow(tree$edge)) {
+    parent <- tree$edge[i, 1]
+    child <- tree$edge[i, 2]
+    
+    parent_state <- if (parent <= length(tree$tip.label)) {
+      tip_states[tree$tip.label[parent]]
+    } else {
+      anc_states_names[parent - length(tree$tip.label)]
+    }
+    
+    child_state <- if (child <= length(tree$tip.label)) {
+      tip_states[tree$tip.label[child]]
+    } else {
+      anc_states_names[child - length(tree$tip.label)]
+    }
+    
+    if (!is.na(parent_state) && !is.na(child_state) && parent_state != child_state) {
+      transitions[parent_state, child_state] <- transitions[parent_state, child_state] + 1
+    }
+  }
+  return(transitions)
+}
+```
+
+### 7.2.3 Ancestral state reconstruction
+
+Observed tip states are mapped to a `phyDat` object and reconstructed using the ACCTRAN parsimony method.
+
+```{r ancestral-reconstruction-consensus, warning=FALSE, eval=TRUE}
+# Prepare tip states
+states <- tip_states$Source
+names(states) <- tip_states$Sample_ID
+states <- states[tree$tip.label]  # Reorder to match the tree tips
+
+# Stop if there are missing values
+if (any(is.na(states))) stop("Missing state values detected!")
+
+# Convert to factor and to list for phyDat
+states <- factor(states, levels = c("clinics", "cattle", "wastewater", "wildlife"))
+states_list <- as.list(as.character(states))
+names(states_list) <- tree$tip.label
+
+# Create the phyDat object
+char_data <- phyDat(states_list, type = "USER", levels = levels(states))
+
+# Perform parsimony reconstruction
+fit_pars <- acctran(tree, char_data)
+anc_states <- ancestral.pars(fit_pars, char_data)
+
+# Convert to matrix for visualization
+anc_matrix <- t(sapply(anc_states, function(x) as.numeric(x)))
+colnames(anc_matrix) <- levels(states)
+```
+
+### 7.2.4 Count observed transitions
+
+This section counts the observed number of state transitions across the consensus tree using the most likely ancestral states. The resulting `transitions_observed` table will later be compared to the distribution from randomized trees to assess whether specific transitions occur more or less often than expected by chance.
+
+```{r count-transitions-on-consensus, warning=FALSE, eval=FALSE}
+
+# Most likely state per node
+anc_states_names <- colnames(anc_matrix)[apply(anc_matrix, 1, which.max)]
+
+# Count observed transitions
+transitions_observed <- count_transitions_parsimony(tree, states, anc_states_names)
+
+# Save to CSV
+#write.csv(transitions_observed, "parsimony/counted_consensus.csv", row.names = FALSE)
+
+# Display table
+transitions_observed %>%
+  knitr::kable(
+    format = "html",
+    longtable = TRUE,
+    booktabs = TRUE,
+    caption = "Observed transitions between sources of ESBL-<i>Escherichia coli</i> on the consensus phylogeny."
+  ) %>%
+  kableExtra::kable_styling(
+    full_width = FALSE,
+    position = "center",
+    latex_options = c("hold_position", "repeat_header")
+  )
+```
+
+### 7.2.5 Null model: randomization of tip states
+
+This code performs a null model analysis to evaluate whether the number and direction of observed state transitions across the phylogeny differ from what would be expected by chance. It generates a distribution of transition counts under 1000 randomized scenarios, where tip states are shuffled while preserving their overall frequencies. This approach controls for state prevalence and allows for comparison against observed data.
+
+Each replicate follows these steps:
+
+1.  Randomization: Tip states are shuffled across the tree, preserving the original frequency distribution.
+
+2.  Phylogenetic reconstruction: The shuffled states are converted into a `phyDat` object and ancestral states are reconstructed using the maximum parsimony `acctran` method.
+
+3.  Transition counting: Transitions between states are tallied across the tree using a custom `count_transitions_parsimony()` function, yielding a named vector of transition counts.
+
+4.  Storage: These counts are stored in a matrix (`all_transitions`) for all 1000 replicates, with rows as replicates and columns representing specific transitions (e.g., `wastewater_to_clinical`).
+
+```{r transition-labels, eval=TRUE, warning=FALSE}
+
+# Create transition label names for storing results
+state_levels <- levels(states)
+transition_labels <- as.vector(outer(state_levels, state_levels, paste, sep = "_to_"))
+```
+
+To re-run the randomization (e.g., after updating the tree or metadata), set `eval=TRUE` and optionally re-save the results.
+
+```{r randomize-consensus, eval=FALSE, warning=FALSE}
+# Set number of replicates
+n_replicates <- 1000
+set.seed(123)  # For reproducibility
+
+# Initialize storage for transition counts
+all_transitions <- matrix(0, nrow = n_replicates, ncol = length(transition_labels))
+colnames(all_transitions) <- transition_labels
+
+# Run randomizations
+for (i in 1:n_replicates) {
+  # Randomize states (preserving frequency)
+  random_states <- sample(states)
+  names(random_states) <- names(states)
+  
+  # Convert to phyDat
+  rand_list <- as.list(random_states)
+  rand_list <- lapply(rand_list, as.character)
+  names(rand_list) <- tree$tip.label
+  char_data_rand <- phyDat(rand_list, type = "USER", levels = state_levels)
+  
+  # Fit parsimony tree and reconstruct ancestors
+  fit_rand <- acctran(tree, char_data_rand)
+  anc_rand <- ancestral.pars(fit_rand, char_data_rand)
+  anc_rand_matrix <- t(sapply(anc_rand, function(x) as.numeric(x)))
+  colnames(anc_rand_matrix) <- state_levels
+  anc_rand_names <- factor(
+    colnames(anc_rand_matrix)[apply(anc_rand_matrix, 1, which.max)],
+    levels = state_levels
+  )
+  
+  # Count transitions
+  transitions_rand <- count_transitions_parsimony(tree, random_states, anc_rand_names)
+  all_transitions[i, ] <- as.vector(transitions_rand)
+  
+  if (i %% 100 == 0) cat("Finished replicate", i, "\n")
+}
+
+# Save to RDS
+#saveRDS(all_transitions, "parsimony/randomization_consensus.rds")
+```
+
+### 7.2.6 Compare observed to null distribution
+
+Upload previously generated data and format them.
+
+```{r load-consensus-rep, warning=FALSE, message=FALSE, eval=TRUE}
+# Consensus tree data
+all_transitions <- readRDS("parsimony/randomization_consensus.rds")
+transitions_observed <- read.csv("parsimony/counted_consensus.csv")
+```
+
+This analysis compares the number of observed state transitions on the consensus phylogeny to a null distribution generated through randomization. Transitions falling outside the 95% confidence interval of the null model are highlighted as potentially non-random, indicating directional patterns in source transitions.
+
+```{r compare-observed-random-consensus, warning=FALSE, eval=TRUE, results='asis'}
+# Convert observed matrix to numeric named vector
+observed_vector <- as.vector(as.matrix(transitions_observed))  # ensure numeric
+names(observed_vector) <- transition_labels
+
+# Calculate 95% CI for each transition
+ci <- apply(all_transitions, 2, quantile, probs = c(0.025, 0.975))
+
+# Combine into summary data frame
+results_df <- data.frame(
+  Transition = transition_labels,
+  Observed = observed_vector,
+  CI_Lower = ci[1, ],
+  CI_Upper = ci[2, ]
+)
+
+# Remove self-transitions (e.g., clinics → clinics)
+results_df <- results_df[!grepl("^(.*)_to_\\1$", results_df$Transition), ]
+
+# Round values to 0 decimals
+results_df$Observed <- round(results_df$Observed)
+results_df$CI_Lower <- round(results_df$CI_Lower)
+results_df$CI_Upper <- round(results_df$CI_Upper)
+
+# Add significance column
+results_df$Significance <- with(results_df, ifelse(
+  Observed < CI_Lower, "Below 95% CI",
+  ifelse(Observed > CI_Upper, "Above 95% CI", "Within 95% CI")
+))
+
+# Display table
+results_df %>%
+  kable(
+    format    = "html",
+    longtable = TRUE,
+    booktabs  = TRUE,
+    escape    = FALSE,
+    caption   = "Summary of observed transitions on the consensus tree and their 95% null confidence intervals from the 1,000 randomizations.",
+    row.names = FALSE  
+  ) %>%
+  kable_styling(
+    full_width    = FALSE,
+    position      = "center",
+    latex_options = c("hold_position", "repeat_header")
+  )
+```
+
+`eval = FALSE` is set below to avoid re-running the code for plotting transition histograms, as the plot has already been generated in Section 3.4. You can re-enable evaluation if you wish to regenerate the plot or make modifications.
+
+```{r fig:transition-histograms-rep, fig.cap = "Distribution of observed and randomized transition counts on the consensus phylogeny. Transitions between collection sources (clinics, wastewater, wildlife, cattle) were inferred using maximum parsimony ancestral state reconstruction on the consensus phylogenetic tree of 762 isolates. For each transition type, tip states were randomized 1,000 times (preserving source frequencies) to generate null distributions of transition counts. Each facet shows the distribution of transition counts from the null model (histogram) for a specific transition type. Solid red lines indicate the observed number of transitions; dashed black lines mark the 95% confidence interval from the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2).", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, eval=FALSE}
+
+# Convert randomizations to long format
+transitions_long <- as.data.frame(all_transitions) %>%
+  mutate(Replicate = 1:nrow(.)) %>%
+  pivot_longer(cols = -Replicate, names_to = "Transition", values_to = "Count")
+
+# Prepare observed data and 95% CI
+ci_data <- apply(all_transitions, 2, quantile, probs = c(0.025, 0.975))
+ci_df <- data.frame(
+  Transition = colnames(all_transitions),
+  CI_Lower = ci_data[1, ],
+  CI_Upper = ci_data[2, ],
+  Original_Count = as.vector(observed_vector)
+)
+
+# Exclude self-transitions
+exclude_self <- c("clinics_to_clinics", "cattle_to_cattle", 
+                  "wastewater_to_wastewater", "wildlife_to_wildlife")
+
+transitions_long <- filter(transitions_long, !Transition %in% exclude_self)
+ci_df <- filter(ci_df, !Transition %in% exclude_self)
+
+# Prettify transition labels
+transitions_long$Transition <- gsub("_", " ", transitions_long$Transition)
+ci_df$Transition <- gsub("_", " ", ci_df$Transition)
+
+# Plot
+ggplot(transitions_long, aes(x = Count)) +
+  geom_histogram(binwidth = 1, fill = "gray70", color = "gray70", boundary = 1) +
+  geom_vline(data = ci_df, aes(xintercept = CI_Lower, linetype = "95% CI"), color = "black", linewidth = 0.5) +
+  geom_vline(data = ci_df, aes(xintercept = CI_Upper, linetype = "95% CI"), color = "black", linewidth = 0.5) +
+  geom_vline(data = ci_df, aes(xintercept = Original_Count, linetype = "# observed transition events"), color = "red", linewidth = 0.6) +
+  scale_linetype_manual(values = c("95% CI" = "dashed", "# observed transition events" = "solid")) +
+  labs(x = "Count", y = "Frequency") +
+  facet_wrap(~ Transition, scales = "free", ncol = 3) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(size = 10, face = "bold"),
+  strip.background = element_rect(fill = "white", color = "black"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.text = element_text(size = 10, color = "black"),     
+    legend.title = element_text(size = 10, color = "black"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10, color = "black"),
+    panel.spacing = unit(1, "lines")
+  ) +
+  guides(linetype = guide_legend(
+    title = "Reference lines", 
+    override.aes = list(color = c("red", "black"))))
+```
+
+## 7.3 Bootstrap tree analysis
+
+This section performs maximum parsimony-based ancestral state reconstruction and transition analysis across bootstrap phylogenies. The goal is to assess whether transitions between sources (e.g., cattle → wastewater) are consistent across phylogenetic uncertainty and whether they deviate from randomized expectations.
+
+7.3.1 Load trees and metadata
+
+```{r load trees and metadata bootstrap, warning=FALSE, eval=TRUE}
+
+# Load required data
+tree_boot <- read.tree("tree_bootstraps.ufboot")
+metadata <- read.csv("sample_annotations.csv", header = T)
+
+# Filter metadata for tips present in the tree
+tip_states <- metadata[metadata$Sample_ID %in% tree_boot$tip.label, ] 
+
+# Create named vector of states
+states <- tip_states$Source
+names(states) <- tip_states$Sample_ID  
+states <- states[tree_boot$tip.label] 
+```
+
+### 7.3.2 Transition analysis: full tree
+
+#### 7.3.2.1 Randomization and ancestral reconstruction across trees
+
+his chunk performs ancestral state reconstruction and transition analysis across 1000 bootstrap phylogenies, with 1000 randomizations per tree to generate null distributions for each transition. Observed transitions are compared against these distributions to assess significance and robustness across phylogenetic uncertainty.\
+The chunk is set to `eval = FALSE` to avoid re-running the full analysis during rendering, as it is computationally intensive.
+
+```{r randomize-bootstrap-full, eval=FALSE, warning=FALSE}
+# Number of randomizations
+n_reps <- 1000
+set.seed(123)
+
+# Store results per tree
+all_bootstrap_results <- list()
+all_random_counts <- list()
+
+# Loop through bootstrap trees
+for (i in seq_along(tree_boot)) {
+  cat("Processing bootstrap tree", i, "\n")
+  tree_i <- tree_boot[[i]]
+  if (!is.rooted(tree_i)) tree_i <- root(tree_i, outgroup = "Escherichia_albertii", resolve.root = TRUE)
+  if (!is.binary(tree_i)) tree_i <- multi2di(tree_i)
+  if ("Escherichia_albertii" %in% tree_i$tip.label) tree_i <- drop.tip(tree_i, "Escherichia_albertii")
+  
+  tip_states_i <- states[tree_i$tip.label]
+  tip_states_i <- factor(tip_states_i, levels = levels(states))
+  tip_list <- setNames(lapply(as.character(tip_states_i), identity), tree_i$tip.label)
+  char_data_i <- phyDat(tip_list, type = "USER", levels = levels(states))
+  
+  fit_pars_i <- acctran(tree_i, char_data_i)
+  anc_i <- ancestral.pars(fit_pars_i, char_data_i)
+  anc_matrix_i <- t(sapply(anc_i, function(x) as.numeric(x)))
+  colnames(anc_matrix_i) <- levels(states)
+  anc_states_i <- factor(colnames(anc_matrix_i)[apply(anc_matrix_i, 1, which.max)], levels = levels(states))
+  
+  # Observed transitions
+  obs_mat <- count_transitions_parsimony(tree_i, tip_states_i, anc_states_i)
+  obs_vec <- as.vector(obs_mat)
+  names(obs_vec) <- as.vector(outer(levels(states), levels(states), paste, sep = "_to_"))
+  
+  # Randomization matrix
+  rand_mat <- matrix(0, nrow = n_reps, ncol = length(obs_vec))
+  colnames(rand_mat) <- names(obs_vec)
+  
+  for (j in 1:n_reps) {
+    rand_states <- sample(tip_states_i)
+    names(rand_states) <- names(tip_states_i)
+    rand_list <- setNames(lapply(as.character(rand_states), identity), tree_i$tip.label)
+    char_data_rand <- phyDat(rand_list, type = "USER", levels = levels(states))
+    fit_rand <- acctran(tree_i, char_data_rand)
+    anc_rand <- ancestral.pars(fit_rand, char_data_rand)
+    anc_rand_matrix <- t(sapply(anc_rand, function(x) as.numeric(x)))
+    colnames(anc_rand_matrix) <- levels(states)
+    anc_rand_names <- factor(colnames(anc_rand_matrix)[apply(anc_rand_matrix, 1, which.max)], levels = levels(states))
+    rand_mat[j, ] <- as.vector(count_transitions_parsimony(tree_i, rand_states, anc_rand_names))
+  }
+  
+  # Confidence intervals
+  ci <- apply(rand_mat, 2, quantile, probs = c(0.025, 0.975))
+  significance <- ifelse(obs_vec < ci[1, ], "Below 95% CI",
+                         ifelse(obs_vec > ci[2, ], "Above 95% CI", "Within 95% CI"))
+  
+  result_df <- data.frame(
+    Tree = paste0("Tree_", i),
+    Transition = names(obs_vec),
+    Observed = obs_vec,
+    CI_Lower = ci[1, ],
+    CI_Upper = ci[2, ],
+    Significance = significance
+  )
+  
+  all_bootstrap_results[[paste0("Tree_", i)]] <- result_df
+  all_random_counts[[paste0("Tree_", i)]] <- rand_mat
+}
+```
+
+#### 7.3.2.2 Save results for future use
+
+This chunk combines the per-tree results of the full bootstrap analysis, summarizes how often each transition was found to be significant, and optionally saves these outputs. Setting `eval = FALSE` prevents this computational step from running during regular document rendering. If you wish to save the results, switch `eval` to `TRUE`.
+
+```{r save-data-bootstrap-full, warning=FALSE, eval=FALSE}
+# Combine results into one dataframe
+combined_results <- do.call(rbind, all_bootstrap_results)
+
+# Summary: how often each transition was significant
+significance_summary <- combined_results %>%
+  group_by(Transition, Significance) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  pivot_wider(names_from = Significance, values_from = Count, values_fill = 0)
+
+# Save outputs to file (uncomment to activate)
+#write.csv(combined_results, "parsimony/bootstrap_MP_significance_results.csv", row.names = FALSE)
+#saveRDS(all_random_counts, "parsimony/all_random_counts.rds")
+#write.csv(significance_summary, "parsimony/significance_summary_across_trees.csv", row.names = FALSE)
+```
+
+#### 7.3.2.3 Load pre-generated bootstrap results
+
+This chunk reloads saved bootstrap outputs to avoid repeating the full randomization analysis. These data are already imported in Section 7.1.1, so this code is included here for reference only.
+
+```{r import-data-bootstrap-full, eval=TRUE, warning=FALSE}
+# Load saved results (if needed)
+combined_results <- read.csv("parsimony/bootstrap_MP_significance_results.csv")
+all_random_counts <- readRDS("parsimony/all_random_counts.rds")
+significance_summary <- read.csv("parsimony/significance_summary_across_trees.csv")
+```
+
+### 7.3.3 ST-Specific transition analyses
+
+This section performs ancestral state reconstruction and randomization-based transition analysis on a subset of bootstrap phylogenies for specific *E. coli* sequence types (ST131, ST10, ST38, ST69, ST1193).
+
+#### 7.3.3.1 Subset tree and metadata
+
+This chunk prepares the bootstrap trees and corresponding state vectors for each sequence type (ST).
+
+```{r subset-bootstrap-sts, warning=FALSE, eval=TRUE}
+# ST131
+metadata_st131 <- metadata %>% filter(ST == "131")
+tips_st131 <- metadata_st131$Sample_ID
+tree_boot_st131 <- lapply(tree_boot, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_st131)))
+states_st131 <- factor(states[tips_st131], levels = levels(states))
+
+# ST10
+metadata_st10 <- metadata %>% filter(ST == "10")
+tips_st10 <- metadata_st10$Sample_ID
+tree_boot_st10 <- lapply(tree_boot, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_st10)))
+states_st10 <- factor(states[tips_st10], levels = levels(states))
+
+# ST38
+metadata_st38 <- metadata %>% filter(ST == "38")
+tips_st38 <- metadata_st38$Sample_ID
+tree_boot_st38 <- lapply(tree_boot, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_st38)))
+states_st38 <- factor(states[tips_st38], levels = levels(states))
+
+# ST69
+metadata_st69 <- metadata %>% filter(ST == "69")
+tips_st69 <- metadata_st69$Sample_ID
+tree_boot_st69 <- lapply(tree_boot, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_st69)))
+states_st69 <- factor(states[tips_st69], levels = levels(states))
+
+# ST1193
+metadata_st1193 <- metadata %>% filter(ST == "1193")
+tips_st1193 <- metadata_st1193$Sample_ID
+tree_boot_st1193 <- lapply(tree_boot, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_st1193)))
+states_st1193 <- factor(states[tips_st1193], levels = levels(states))
+```
+
+The number of isolates included in each ST-specific phylogenetic analysis is summarized below.
+
+```{r, count-isolates-tree, eval=TRUE, warning=FALSE, results='asis'}
+
+# Count number of isolates (tips) per ST group
+n_ST131 <- length(tips_st131)
+n_ST10 <- length(tips_st10)
+n_ST38 <- length(tips_st38)
+n_ST69 <- length(tips_st69)
+n_ST1193 <- length(tips_st1193)
+
+# Create a data frame of the counts
+isolate_counts <- data.frame(
+  "ST" = c("ST131", "ST10", "ST38", "ST69", "ST1193"),
+  "n" = c(n_ST131, n_ST10, n_ST38, n_ST69, n_ST1193))
+
+# Display table
+isolate_counts %>%
+  kable(
+    format    = "html",
+    longtable = TRUE,
+    booktabs  = TRUE,
+    escape    = FALSE,
+    caption   = "Number of isolates (n) per sequence type (ST)",
+    row.names = FALSE
+  ) %>%
+  kable_styling(
+    full_width    = FALSE,
+    position      = "center",
+    latex_options = c("hold_position", "repeat_header")
+  ) 
+```
+
+#### 7.3.3.2 Run randomization and ancestral reconstruction per ST
+
+For each ST, perform ancestral state reconstruction and randomization to generate observed and null transition matrices. These chunks are set to `eval = FALSE` to avoid re-running.
+
+```{r randomize-bootstrap-all, eval=FALSE, warning=FALSE}
+
+# Shared code for ST-specific transition analysis and randomization
+run_transition_analysis <- function(tree_list, states_vec, st_name, seed_val) {
+  set.seed(seed_val)
+  n_reps <- 1000
+  state_levels <- levels(states_vec)
+  transition_labels <- as.vector(outer(state_levels, state_levels, paste, sep = "_to_"))
+  results_list <- list()
+  randoms_list <- list()
+
+  for (i in seq_along(tree_list)) {
+    cat("Processing", st_name, "tree", i, "\n")
+    tree_i <- tree_list[[i]]
+    tip_states <- factor(states_vec[tree_i$tip.label], levels = state_levels)
+    tip_list <- setNames(lapply(as.character(tip_states), identity), tree_i$tip.label)
+    char_data <- phyDat(tip_list, type = "USER", levels = state_levels)
+
+    fit_pars <- acctran(tree_i, char_data)
+    anc <- ancestral.pars(fit_pars, char_data)
+    anc_matrix <- t(sapply(anc, function(x) as.numeric(x)))
+    colnames(anc_matrix) <- state_levels
+    anc_states <- factor(colnames(anc_matrix)[apply(anc_matrix, 1, which.max)], levels = state_levels)
+
+    obs_mat <- count_transitions_parsimony(tree_i, tip_states, anc_states)
+    obs_vec <- as.vector(obs_mat)
+    names(obs_vec) <- transition_labels
+
+    rand_mat <- matrix(0, nrow = n_reps, ncol = length(obs_vec))
+    colnames(rand_mat) <- transition_labels
+
+    for (j in 1:n_reps) {
+      rand_states <- sample(tip_states)
+      names(rand_states) <- names(tip_states)
+      rand_list <- setNames(lapply(as.character(rand_states), identity), tree_i$tip.label)
+      char_data_rand <- phyDat(rand_list, type = "USER", levels = state_levels)
+
+      fit_rand <- acctran(tree_i, char_data_rand)
+      anc_rand <- ancestral.pars(fit_rand, char_data_rand)
+      anc_rand_matrix <- t(sapply(anc_rand, function(x) as.numeric(x)))
+      colnames(anc_rand_matrix) <- state_levels
+      anc_rand_states <- factor(colnames(anc_rand_matrix)[apply(anc_rand_matrix, 1, which.max)], levels = state_levels)
+
+      rand_mat[j, ] <- as.vector(count_transitions_parsimony(tree_i, rand_states, anc_rand_states))
+    }
+
+    ci <- apply(rand_mat, 2, quantile, probs = c(0.025, 0.975))
+    significance <- ifelse(obs_vec < ci[1, ], "Below 95% CI",
+                           ifelse(obs_vec > ci[2, ], "Above 95% CI", "Within 95% CI"))
+
+    results_list[[paste0("Tree_", i)]] <- data.frame(
+      Tree = paste0("Tree_", i),
+      Transition = transition_labels,
+      Observed = obs_vec,
+      CI_Lower = ci[1, ],
+      CI_Upper = ci[2, ],
+      Significance = significance
+    )
+
+    randoms_list[[paste0("Tree_", i)]] <- rand_mat
+  }
+
+  assign(paste0("all_bootstrap_results_", st_name), results_list, envir = .GlobalEnv)
+  assign(paste0("all_random_counts_", st_name), randoms_list, envir = .GlobalEnv)
+}
+
+# Run separately per ST
+run_transition_analysis(tree_boot_st131, states_st131, "st131", 131)
+run_transition_analysis(tree_boot_st10, states_st10, "st10", 10)
+run_transition_analysis(tree_boot_st38, states_st38, "st38", 38)
+run_transition_analysis(tree_boot_st69, states_st69, "st69", 69)
+run_transition_analysis(tree_boot_st1193, states_st1193, "st1193", 1193)
+
+```
+
+#### 7.3.3.3 Save results for future use
+
+Combine, summarize, and save results for each ST. These are cached so the randomization doesn't have to be re-run.
+
+```{r save-bootstrap-data-all, warning=FALSE, eval=FALSE}
+save_bootstrap_data <- function(st) {
+  combined_results <- do.call(rbind, get(paste0("all_bootstrap_results_", st)))
+  significance_summary <- combined_results %>%
+    group_by(Transition, Significance) %>%
+    summarise(Count = n(), .groups = "drop") %>%
+    pivot_wider(names_from = Significance, values_from = Count, values_fill = 0)
+
+#saveRDS(get(paste0("all_random_counts_", st)), paste0("parsimony/all_random_counts_", toupper(st), ".rds"))
+#write.csv(combined_results, paste0("parsimony/bootstrap_MP_significance_results_", toupper(st), ".csv"), row.names = FALSE)
+#write.csv(significance_summary, paste0("parsimony/significance_summary_across_trees_", toupper(st), ".csv"), row.names = FALSE)
+}
+
+save_bootstrap_data("st131")
+save_bootstrap_data("st10")
+save_bootstrap_data("st38")
+save_bootstrap_data("st69")
+save_bootstrap_data("st1193")
+```
+
+#### 7.3.3.4 Load pre-generated ST results
+
+Re-load saved `.csv` and `.rds` files for analysis. The same chunk is already presented in Section 7.1.1.
+
+```{r import-bootstrap-data-all, warning=FALSE, eval=TRUE}
+combined_results_st131 <- read.csv("parsimony/bootstrap_MP_significance_results_ST131.csv")
+combined_results_st10 <- read.csv("parsimony/bootstrap_MP_significance_results_ST10.csv")
+combined_results_st38 <- read.csv("parsimony/bootstrap_MP_significance_results_ST38.csv")
+combined_results_st69 <- read.csv("parsimony/bootstrap_MP_significance_results_ST69.csv")
+combined_results_st1193 <- read.csv("parsimony/bootstrap_MP_significance_results_ST1193.csv")
+
+all_random_counts_st131 <- readRDS("parsimony/all_random_counts_ST131.rds")
+all_random_counts_st10 <- readRDS("parsimony/all_random_counts_ST10.rds")
+all_random_counts_st38 <- readRDS("parsimony/all_random_counts_ST38.rds")
+all_random_counts_st69 <- readRDS("parsimony/all_random_counts_ST69.rds")
+all_random_counts_st1193 <- readRDS("parsimony/all_random_counts_ST1193.rds")
+
+significance_summary_st131 <- read.csv("parsimony/significance_summary_across_trees_ST131.csv")
+significance_summary_st10 <- read.csv("parsimony/significance_summary_across_trees_ST10.csv")
+significance_summary_st38 <- read.csv("parsimony/significance_summary_across_trees_ST38.csv")
+significance_summary_st69 <- read.csv("parsimony/significance_summary_across_trees_ST69.csv")
+significance_summary_st1193 <- read.csv("parsimony/significance_summary_across_trees_ST1193.csv")
+```
+
+#### 7.3.3.5 Z-score calculation: observed vs null transitions (per ST)
+
+The function below calculates **standardized Z-scores** for each transition event by comparing observed counts to the mean and standard deviation of the null distribution. This provides a quantitative measure of deviation from randomness, per bootstrap tree.
+
+```{r z-score-function, warning=FALSE, eval=TRUE}
+compute_z_scores <- function(combined_results, all_random_counts) {
+  nonzero <- combined_results %>%
+    group_by(Transition) %>%
+    summarise(sum_obs = sum(Observed)) %>%
+    filter(sum_obs > 0) %>%
+    pull(Transition)
+
+  combined_results <- combined_results %>% filter(Transition %in% nonzero)
+
+  z_scores <- lapply(seq_along(all_random_counts), function(i) {
+    tree_name <- paste0("Tree_", i)
+    null_matrix <- all_random_counts[[tree_name]][, nonzero, drop = FALSE]
+    rand_mean <- colMeans(null_matrix)
+    rand_sd <- apply(null_matrix, 2, sd)
+
+    observed_df <- combined_results %>%
+      filter(Tree == tree_name, Transition %in% nonzero) %>%
+      arrange(match(Transition, nonzero)) %>%
+      pull(Observed)
+
+    data.frame(
+      Tree = tree_name,
+      Transition = gsub("_to_", " to ", nonzero),
+      Z_score = (observed_df - rand_mean) / rand_sd
+    )
+  }) %>% bind_rows()
+
+  return(z_scores)
+}
+```
+
+The chunk below applies the `compute_z_scores()` function to all ST-specific bootstrap results.
+
+```{r z-score-computing-st, warning=FALSE, eval=TRUE}
+
+z_scores_st131 <- compute_z_scores(combined_results_st131, all_random_counts_st131)
+z_scores_st10 <- compute_z_scores(combined_results_st10, all_random_counts_st10)
+z_scores_st38 <- compute_z_scores(combined_results_st38, all_random_counts_st38)
+z_scores_st69 <- compute_z_scores(combined_results_st69, all_random_counts_st69)
+z_scores_st1193 <- compute_z_scores(combined_results_st1193, all_random_counts_st1193)
+```
+
+#### 7.3.3.6 Plot Z-score distributions (Figure 5)
+
+If the full bootstrap analysis was not re-run earlier in the notebook (Section 7.3.2), the following chunk reloads the previously saved full-tree transition results. This step is required for plotting the combined Z-score distributions.
+
+```{r import-pre-generated-data-full-tree, warning=FALSE, eval=TRUE}
+
+combined_results <- read.csv("parsimony/bootstrap_MP_significance_results.csv")
+all_random_counts <- readRDS("parsimony/all_random_counts.rds")
+significance_summary <- read.csv("parsimony/significance_summary_across_trees.csv")
+```
+
+If full-tree results were just loaded, run this chunk to compute Z-scores using the same method as for individual STs.
+
+```{r format-pre-generated-data-full, warning=FALSE, eval=TRUE}
+# Apply the function to the full tree
+z_scores        <- compute_z_scores(combined_results, all_random_counts)
+```
+
+This final chunk combines Z-scores from the full tree and all major STs into a single, comparative visualization. Each boxplot shows the distribution of Z-scores across bootstrap trees for a specific transition. Red dashed lines mark the ±1.96 threshold, indicating 95% confidence bounds under the null model. `eval = FALSE` is set below to avoid re-running the code for plotting, as the plot has already been generated in Section 7.1.3. You can re-enable evaluation if you wish to regenerate the plot or make modifications.
+
+```{r fig:plot-bootstrap-combined-single-analysis-an, fig.cap = "Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for the full dataset and dominant sequence types (STs). Transitions between collection sources (clinics, wastewater, wildlife, cattle) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (full dataset and the five dominant STs: ST131, ST10, ST38, ST69, ST1193). The legend shows the number of isolates retained in the analysis for each ST. Red dashed lines indicate ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=10, fig.width=8, fig.lp=NULL, warning=FALSE, eval=FALSE}
+
+# Add group labels
+z_scores$Group <- "Full tree"
+z_scores_st131$Group <- "ST131"
+z_scores_st10$Group <- "ST10"
+z_scores_st38$Group <- "ST38"
+z_scores_st69$Group <- "ST69"
+z_scores_st1193$Group <- "ST1193"
+
+# Combine data
+z_scores_combined <- bind_rows(z_scores, z_scores_st131, z_scores_st10, z_scores_st38, z_scores_st69, z_scores_st1193)
+
+# Rename "livestock" to "cattle" in transition labels before formatting
+z_scores_combined$Transition <- gsub("livestock", "cattle", z_scores_combined$Transition)
+
+# Clean up and format transition labels
+z_scores_combined$Transition <- gsub("_to_", " → ", z_scores_combined$Transition)
+
+# Ensure transitions and group order
+z_scores_combined$Transition <- factor(z_scores_combined$Transition,
+                                       levels = rev(sort(unique(z_scores_combined$Transition))))
+z_scores_combined$Group <- factor(z_scores_combined$Group, levels = c("ST1193", "ST69", "ST38", "ST10","ST131", "Full tree"))
+
+# Ensure every combination is represented
+z_scores_combined_full <- expand.grid(
+  Transition = unique(z_scores_combined$Transition),
+  Group = levels(z_scores_combined$Group)
+) %>%
+  left_join(z_scores_combined, by = c("Transition", "Group"))
+
+
+# Order transitions and group
+z_scores_combined_full$Transition <- factor(z_scores_combined_full$Transition,
+                                            levels = rev(sort(unique(z_scores_combined_full$Transition))))
+z_scores_combined_full$Group <- factor(z_scores_combined_full$Group,
+                                       levels = c("ST1193","ST69","ST38", "ST10", "ST131", "Full tree"))
+
+# Get unique levels of transitions
+trans_levels <- levels(z_scores_combined_full$Transition)
+
+# Determine where to place lines (between factors, i.e., at integer positions)
+vline_positions <- seq(1.5, length(trans_levels) - 0.5, by = 1)
+
+# Plot
+ggplot(z_scores_combined_full, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
+  geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.1),
+               outlier.shape = NA, width = 1, linewidth = 0.2) +
+  geom_hline(yintercept = c(-1.96, 1.96), linetype = "dashed", color = "red", linewidth = 0.4) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("Full tree" = "skyblue", "ST131" = "#f7d080", "ST10" = "#f0bd9bff", 
+               "ST38" = "#ab7d5dff", "ST69" = "#afbf8dff", "ST1193" = "#9cafaaff"),
+    labels = c("Full tree" = "Full tree (n=762)", 
+               "ST131" = "ST131 (n=197)", 
+               "ST10" = "ST10 (n=66)", 
+               "ST38" = "ST38 (n=55)", 
+               "ST69" = "ST69 (n=53)", 
+               "ST1193" = "ST1193 (n=44)")
+  ) +
+  scale_color_manual(
+    values = c("Full tree" = "#3399cc", "ST131" = "#d6b060", "ST10" = "#d09b79", 
+               "ST38" = "#8c6249", "ST69" = "#8e9e6d", "ST1193" = "#7c8e8a"),
+    labels = c("Full tree" = "Full tree (n=762)", 
+               "ST131" = "ST131 (n=197)", 
+               "ST10" = "ST10 (n=66)", 
+               "ST38" = "ST38 (n=55)", 
+               "ST69" = "ST69 (n=53)", 
+               "ST1193" = "ST1193 (n=44)")
+  ) +
+  guides(
+    fill = guide_legend(title = "Dataset (n of isolates)", reverse = TRUE),
+    color = guide_legend(title = "Dataset (n of isolates)", reverse = TRUE)
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 12, color = "black"),
+    axis.text.x = element_text(size = 12, color = "black"),
+    axis.title = element_text(size = 14, color = "black"),
+    legend.position = "bottom",
+    legend.justification = "center",
+    legend.box = "horizontal",
+    legend.text = element_text(size = 12, color = "black"),     
+    legend.title = element_text(size = 12, color = "black"),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank()   
+  ) +
+  geom_vline(xintercept = vline_positions, linetype = "solid", color = "black", size = 0.2)
+
+```
+
+### 7.3.4 Table S12
+
+```{r tableS12, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Improved helper: add missing columns if not present, keep existing ones
+standardize_significance_df <- function(df, dataset_name) {
+  # Clean column names
+  names(df) <- gsub("\\.+", ".", names(df))  # Keep dot for now
+  names(df) <- trimws(names(df))
+
+  # Rename columns for consistency
+  colnames(df) <- sub(".*Transition.*", "Transition", colnames(df))
+  colnames(df) <- sub("Below.*", "Below 95% CI", colnames(df))
+  colnames(df) <- sub("Within.*", "Within 95% CI", colnames(df))
+  colnames(df) <- sub("Above.*", "Above 95% CI", colnames(df))
+
+  # Add missing columns only if they don't exist
+  if (!"Below 95% CI" %in% colnames(df))  df$`Below 95% CI`  <- 0
+  if (!"Within 95% CI" %in% colnames(df)) df$`Within 95% CI` <- 0
+  if (!"Above 95% CI" %in% colnames(df))  df$`Above 95% CI`  <- 0
+
+  # Add Dataset column
+  df$Dataset <- dataset_name
+
+  # Ensure correct column order
+  df <- df[, c("Transition", "Below 95% CI", "Within 95% CI", "Above 95% CI", "Dataset")]
+
+  # Return
+  return(df)
+}
+
+# Apply to each
+df_full    <- standardize_significance_df(significance_summary,        "Full phylogeny")
+df_st131   <- standardize_significance_df(significance_summary_st131,  "ST131")
+df_st10    <- standardize_significance_df(significance_summary_st10,   "ST10")
+df_st38    <- standardize_significance_df(significance_summary_st38,   "ST38")
+df_st69    <- standardize_significance_df(significance_summary_st69,   "ST69")
+df_st1193  <- standardize_significance_df(significance_summary_st1193, "ST1193")
+
+# Combine
+tableS12 <- bind_rows(df_full, df_st131, df_st10, df_st38, df_st69, df_st1193)
+
+# Clean transition labels
+tableS12$Transition <- gsub("_to_", " to ", tableS12$Transition)
+
+# Reorder columns: Dataset first
+tableS12 <- tableS12[, c("Dataset", "Transition", "Below 95% CI", "Within 95% CI", "Above 95% CI")]
+
+# Display the table
+tableS12 %>%
+  kable(
+    format = "html",
+    longtable = TRUE,
+    booktabs = TRUE,
+    escape = FALSE,
+    caption = "Table S12: Significance summary of transition frequencies across 1,000 bootstrap phylogenies for the full dataset and the five most dominant sequence types (ST131, ST10, ST38, ST69, ST1193). The table reports the number of bootstrap trees in which the observed number of transitions between sources fell below, within, or above the central 95% confidence interval of the null distribution generated by 1,000 random permutations. Transitions with counts below the 95% CI (columns 'Below 95% CI') or above the 95% CI (columns 'Above 95% CI') indicate significant deviation from random expectations at the 0.05 level."
+  ) %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    latex_options = c("hold_position", "repeat_header")
+  ) 
+
+# Save to file
+#write.csv(tableS12, "./tables/TableS12.csv", row.names = FALSE)
+```
+
+## 7.4 Wastewater and clinical isolates only (WWC)
+
+### 7.4.1 Load trees and metadata
+
+This chunk loads the bootstrap phylogenies and associated sample metadata, standardizes the source labels, and filters the metadata to include only tips present in the trees.
+
+```{r load trees and metadata bootstrap wwc, warning=FALSE, eval=TRUE}
+
+# Load required data
+tree_boot <- read.tree("tree_bootstraps.ufboot")
+metadata <- read.csv("sample_annotations.csv", header = T)
+
+# Filter metadata for tips present in the tree
+tip_labels <- tree_boot[[1]]$tip.label
+tip_states <- metadata[metadata$Sample_ID %in% tip_labels, ]
+
+# Create named vector of states
+states <- tip_states$Source
+names(states) <- tip_states$Sample_ID  
+states <- states[tip_labels]      
+```
+
+### 7.4.2 Filter for wastewater and clinical isolates
+
+This chunk subsets the data to include only wastewater and clinical isolates, and prunes each bootstrap tree accordingly. The state vector is also updated to reflect this filtered dataset.
+
+```{r prune-wwc, warning = FALSE, eval=TRUE}
+# Filter metadata to retain only wastewater and clinic isolates
+metadata_wwc <- metadata %>% filter(Source %in% c("wastewater", "clinics"))
+
+# Get WWC tip labels
+tips_wwc <- metadata_wwc$Sample_ID
+
+# Prune each tree to keep only WWC tips
+tree_boot_wwc <- lapply(tree_boot, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_wwc)))
+
+# Align states_wwc to the tips of the first pruned WWC tree
+states_wwc <- states[tips_wwc]
+states_wwc <- factor(states_wwc, levels = c("clinics", "wastewater"))
+
+# Count number of isolates in filtered tree
+n_wwc <- length(tips_wwc)
+print(n_wwc)
+table(states_wwc)
+
+# Format and display the WWC source counts
+states_wwc_df <- as.data.frame(table(states_wwc))
+colnames(states_wwc_df) <- c("Source", "n")
+
+states_wwc_df %>%
+  kable(
+    format    = "html",
+    longtable = TRUE,
+    booktabs  = TRUE,
+    escape    = FALSE,
+    caption   = "Number of isolates per source (clinics and wastewater) retained in the WWC-pruned bootstrap phylogenies.",
+    row.names = FALSE
+  ) %>%
+  kable_styling(
+    full_width    = FALSE,
+    position      = "center",
+    latex_options = c("hold_position", "repeat_header")
+  ) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, bold = TRUE)
+```
+
+### 7.4.3 Transition analysis: full tree
+
+#### 7.4.3.1 Ancestral state reconstruction and randomization
+
+This chunk performs ancestral state reconstruction and randomization-based transition analysis for each bootstrap tree. Randomized replicates (n = 1000) are used to generate null expectations for transition frequencies. This section is computationally intensive and is set to `eval = FALSE`. To reproduce results without rerunning this, refer to Section 7.4.3.3 for loading saved outputs.
+
+```{r analysis-wwc, warning=FALSE, eval=FALSE}
+n_reps <- 1000
+set.seed(5678)
+
+all_bootstrap_results_wwc <- list()
+all_random_counts_wwc <- list()
+
+state_levels <- levels(states_wwc)
+transition_labels_wwc <- as.vector(outer(state_levels, state_levels, paste, sep = "_to_"))
+
+for (i in seq_along(tree_boot_wwc)) {
+  cat("Processing WWC bootstrap tree", i, "\n")
+  tree_i <- tree_boot_wwc[[i]]
+  
+  # Align state labels
+  tip_states_i <- states_wwc[tree_i$tip.label]
+  tip_states_i <- factor(tip_states_i, levels = state_levels)
+  
+  # Build phyDat
+  tip_list <- setNames(lapply(as.character(tip_states_i), identity), tree_i$tip.label)
+  char_data_i <- phyDat(tip_list, type = "USER", levels = state_levels)
+  
+  # Parsimony + ancestral reconstruction
+  fit_pars_i <- acctran(tree_i, char_data_i)
+  anc_i <- ancestral.pars(fit_pars_i, char_data_i)
+  anc_matrix_i <- t(sapply(anc_i, function(x) as.numeric(x)))
+  colnames(anc_matrix_i) <- state_levels
+  anc_states_i <- factor(colnames(anc_matrix_i)[apply(anc_matrix_i, 1, which.max)], levels = state_levels)
+  
+  # Observed transitions
+  obs_mat <- count_transitions_parsimony(tree_i, tip_states_i, anc_states_i)
+  obs_vec <- as.vector(obs_mat)
+  names(obs_vec) <- transition_labels_wwc
+  
+  # Randomizations
+  rand_mat <- matrix(0, nrow = n_reps, ncol = length(obs_vec))
+  colnames(rand_mat) <- transition_labels_wwc
+  
+  for (j in 1:n_reps) {
+    rand_states <- sample(tip_states_i)
+    names(rand_states) <- names(tip_states_i)
+    
+    rand_list <- setNames(lapply(as.character(rand_states), identity), tree_i$tip.label)
+    char_data_rand <- phyDat(rand_list, type = "USER", levels = state_levels)
+    
+    fit_rand <- acctran(tree_i, char_data_rand)
+    anc_rand <- ancestral.pars(fit_rand, char_data_rand)
+    anc_rand_matrix <- t(sapply(anc_rand, function(x) as.numeric(x)))
+    colnames(anc_rand_matrix) <- state_levels
+    anc_rand_names <- factor(colnames(anc_rand_matrix)[apply(anc_rand_matrix, 1, which.max)], levels = state_levels)
+    
+    rand_mat[j, ] <- as.vector(count_transitions_parsimony(tree_i, rand_states, anc_rand_names))
+  }
+  
+  # Significance
+  ci <- apply(rand_mat, 2, quantile, probs = c(0.025, 0.975))
+  significance <- ifelse(obs_vec < ci[1, ], "Below 95% CI",
+                         ifelse(obs_vec > ci[2, ], "Above 95% CI", "Within 95% CI"))
+  
+  result_df <- data.frame(
+    Tree = paste0("Tree_", i),
+    Transition = transition_labels_wwc,
+    Observed = obs_vec,
+    CI_Lower = ci[1, ],
+    CI_Upper = ci[2, ],
+    Significance = significance
+  )
+  
+  all_bootstrap_results_wwc[[paste0("Tree_", i)]] <- result_df
+  all_random_counts_wwc[[paste0("Tree_", i)]] <- rand_mat
+}
+```
+
+#### 7.4.3.2 Save results for future use
+
+This chunk saves the results of the randomization and significance testing. This step is only required if you re-run the full randomization analysis. Set to `eval = FALSE` to prevent re-execution.
+
+```{r save-wwc-results, warning=FALSE, eval=FALSE}
+
+#Combine results
+combined_results_wwc <- do.call(rbind, all_bootstrap_results_wwc)
+
+# Remove self-transitions BEFORE summarizing
+combined_results_wwc <- combined_results_wwc %>%
+  filter(!grepl("^(.*)_to_\\1$", Transition))  
+
+# Summary: how often each transition was significant
+significance_summary_wwc <- combined_results_wwc %>%
+  group_by(Transition, Significance) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  pivot_wider(names_from = Significance, values_from = Count, values_fill = 0)
+
+# Save results
+#write.csv(combined_results_wwc, "parsimony/bootstrap_MP_significance_results_wwc.csv", row.names = FALSE)
+#saveRDS(all_random_counts_wwc, "parsimony/all_random_counts_wwc.rds")
+#write.csv(significance_summary_wwc, "parsimony/significance_summary_across_trees_WWC.csv", row.names = FALSE)
+```
+
+#### 7.4.3.3 Load pre-generated data
+
+his chunk loads pre-saved results from Section 7.4.3.1, allowing you to reproduce downstream analyses (e.g., z-scores, visualization) without re-running the randomization.
+
+```{r load-data-wwc, warning=FALSE, eval=TRUE}
+
+# Load previously saved data
+combined_results_wwc <- read.csv("parsimony/bootstrap_MP_significance_results_wwc.csv")
+all_random_counts_wwc <- readRDS("parsimony/all_random_counts_wwc.rds")
+significance_summary_wwc <- read.csv("parsimony/significance_summary_across_trees_wwc.csv")
+```
+
+### 7.4.4 ST-specific transition analyses on WWC subset
+
+This section performs ancestral state reconstruction and randomization-based transition analysis for specific *E. coli* sequence types (ST131, ST10, ST38, ST69, ST1193), using bootstrap phylogenies pruned to include only wastewater and clinical isolates.
+
+#### 7.4.4.1 Subset WWC trees and metadata per ST
+
+```{r subset-bootstrap-sts-wwc, warning=FALSE, eval=TRUE}
+
+# ST131
+metadata_wwc_st131 <- metadata_wwc %>% filter(ST == "131")
+tips_wwc_st131 <- metadata_wwc_st131$Sample_ID
+tree_boot_wwc_st131 <- lapply(tree_boot_wwc, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_wwc_st131)))
+states_wwc_st131 <- factor(states_wwc[tips_wwc_st131], levels = levels(states_wwc))
+
+# ST10
+metadata_wwc_st10 <- metadata_wwc %>% filter(ST == "10")
+tips_wwc_st10 <- metadata_wwc_st10$Sample_ID
+tree_boot_wwc_st10 <- lapply(tree_boot_wwc, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_wwc_st10)))
+states_wwc_st10 <- factor(states_wwc[tips_wwc_st10], levels = levels(states_wwc))
+
+# ST38
+metadata_wwc_st38 <- metadata_wwc %>% filter(ST == "38")
+tips_wwc_st38 <- metadata_wwc_st38$Sample_ID
+tree_boot_wwc_st38 <- lapply(tree_boot_wwc, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_wwc_st38)))
+states_wwc_st38 <- factor(states_wwc[tips_wwc_st38], levels = levels(states_wwc))
+
+# ST69
+metadata_wwc_st69 <- metadata_wwc %>% filter(ST == "69")
+tips_wwc_st69 <- metadata_wwc_st69$Sample_ID
+tree_boot_wwc_st69 <- lapply(tree_boot_wwc, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_wwc_st69)))
+states_wwc_st69 <- factor(states_wwc[tips_wwc_st69], levels = levels(states_wwc))
+
+# ST1193
+metadata_wwc_st1193 <- metadata_wwc %>% filter(ST == "1193")
+tips_wwc_st1193 <- metadata_wwc_st1193$Sample_ID
+tree_boot_wwc_st1193 <- lapply(tree_boot_wwc, function(tr) drop.tip(tr, setdiff(tr$tip.label, tips_wwc_st1193)))
+states_wwc_st1193 <- factor(states_wwc[tips_wwc_st1193], levels = levels(states_wwc))
+```
+
+The number of isolates included in each ST-specific phylogenetic analysis is summarized below.
+
+```{r, count-isolates-tree-wwc, eval=TRUE, warning=FALSE, results='asis'}
+
+# Count number of isolates (tips) per ST group
+n_ST131_wwc <- length(tips_wwc_st131)
+n_ST10_wwc <- length(tips_wwc_st10)
+n_ST38_wwc <- length(tips_wwc_st38)
+n_ST69_wwc <- length(tips_wwc_st69)
+n_ST1193_wwc <- length(tips_wwc_st1193)
+
+# Create a data frame of the counts
+isolate_counts_wwc <- data.frame(
+  "ST" = c("ST131", "ST10", "ST38", "ST69", "ST1193"),
+  "n" = c(n_ST131_wwc, n_ST10_wwc, n_ST38_wwc, n_ST69_wwc, n_ST1193_wwc))
+
+# Display table
+isolate_counts_wwc %>%
+  kable(
+    format    = "html",
+    longtable = TRUE,
+    booktabs  = TRUE,
+    escape    = FALSE,
+    caption   = "Number of isolates (n) per sequence type (ST) when only clinical and wastewater isolates are considered.",
+    row.names = FALSE
+  ) %>%
+  kable_styling(
+    full_width    = FALSE,
+    position      = "center",
+    latex_options = c("hold_position", "repeat_header")
+  ) 
+```
+
+#### 7.4.4.2 Run ST-specific WWC transition analyses
+
+```{r randomize-bootstrap-all-wwc, eval=FALSE, warning=FALSE}
+
+run_transition_analysis <- function(tree_list, states_vec, st_name, seed_val) {
+  set.seed(seed_val)
+  n_reps <- 1000
+  results_list <- list()
+  randoms_list <- list()
+
+  # Always use levels from states_wwc for consistency
+  global_levels <- levels(states_wwc)
+  transition_labels <- as.vector(outer(global_levels, global_levels, paste, sep = "_to_"))
+
+  for (i in seq_along(tree_list)) {
+    cat("Processing", st_name, "WWC tree", i, "\n")
+    tree_i <- tree_list[[i]]
+
+    # Align state labels for tips in this tree, using global_levels
+    tip_states <- factor(states_vec[tree_i$tip.label], levels = global_levels)
+
+    # Skip if all tips are the same state (no transitions possible)
+    if (length(unique(na.omit(tip_states))) < 2) {
+      cat("Skipping tree", i, "- only one state present\n")
+      next
+    }
+
+    # Build phyDat
+    tip_list <- setNames(lapply(as.character(tip_states), identity), tree_i$tip.label)
+    char_data <- phyDat(tip_list, type = "USER", levels = global_levels)
+
+    # Parsimony + ancestral reconstruction
+    fit_pars <- acctran(tree_i, char_data)
+    anc <- ancestral.pars(fit_pars, char_data)
+    anc_matrix <- t(sapply(anc, function(x) as.numeric(x)))
+    colnames(anc_matrix) <- global_levels
+    anc_states <- factor(colnames(anc_matrix)[apply(anc_matrix, 1, which.max)], levels = global_levels)
+
+    # Observed transitions
+    obs_mat <- count_transitions_parsimony(tree_i, tip_states, anc_states)
+    obs_vec <- as.vector(obs_mat)
+    names(obs_vec) <- transition_labels
+
+    # Randomizations
+    rand_mat <- matrix(0, nrow = n_reps, ncol = length(obs_vec))
+    colnames(rand_mat) <- transition_labels
+
+    for (j in 1:n_reps) {
+      rand_states <- sample(tip_states)
+      names(rand_states) <- names(tip_states)
+      rand_list <- setNames(lapply(as.character(rand_states), identity), tree_i$tip.label)
+      char_data_rand <- phyDat(rand_list, type = "USER", levels = global_levels)
+
+      fit_rand <- acctran(tree_i, char_data_rand)
+      anc_rand <- ancestral.pars(fit_rand, char_data_rand)
+      anc_rand_matrix <- t(sapply(anc_rand, function(x) as.numeric(x)))
+      colnames(anc_rand_matrix) <- global_levels
+      anc_rand_states <- factor(colnames(anc_rand_matrix)[apply(anc_rand_matrix, 1, which.max)], levels = global_levels)
+
+      rand_mat[j, ] <- as.vector(count_transitions_parsimony(tree_i, rand_states, anc_rand_states))
+    }
+
+    # Significance
+    ci <- apply(rand_mat, 2, quantile, probs = c(0.025, 0.975))
+    significance <- ifelse(obs_vec < ci[1, ], "Below 95% CI",
+                           ifelse(obs_vec > ci[2, ], "Above 95% CI", "Within 95% CI"))
+
+    result_df <- data.frame(
+      Tree = paste0("Tree_", i),
+      Transition = transition_labels,
+      Observed = obs_vec,
+      CI_Lower = ci[1, ],
+      CI_Upper = ci[2, ],
+      Significance = significance
+    )
+
+    results_list[[paste0("Tree_", i)]] <- result_df
+    randoms_list[[paste0("Tree_", i)]] <- rand_mat
+  }
+
+  assign(paste0("all_bootstrap_results_wwc_", st_name), results_list, envir = .GlobalEnv)
+  assign(paste0("all_random_counts_wwc_", st_name), randoms_list, envir = .GlobalEnv)
+}
+
+# Run per ST for WWC-only data
+run_transition_analysis(tree_boot_wwc_st131, states_wwc_st131, "st131", 131)
+run_transition_analysis(tree_boot_wwc_st10, states_wwc_st10, "st10", 10)
+run_transition_analysis(tree_boot_wwc_st38, states_wwc_st38, "st38", 38)
+run_transition_analysis(tree_boot_wwc_st69, states_wwc_st69, "st69", 69)
+run_transition_analysis(tree_boot_wwc_st1193, states_wwc_st1193, "st1193", 1193)
+```
+
+#### 7.4.4.3 Save WWC ST results
+
+```{r save-bootstrap-data-all-wwc, warning=FALSE, eval=FALSE}
+
+save_bootstrap_data_wwc <- function(st) {
+  combined_results_wwc <- do.call(rbind, get(paste0("all_bootstrap_results_wwc_", st)))
+  
+  # Remove self-transitions (e.g., clinics_to_clinics, wastewater_to_wastewater)
+  combined_results_wwc <- combined_results_wwc %>%
+    filter(!grepl("^(.*)_to_\\1$", Transition))  # Regex to catch self-transitions
+
+  # Summary: how often each non-self transition was significant
+  significance_summary_wwc <- combined_results_wwc %>%
+    group_by(Transition, Significance) %>%
+    summarise(Count = n(), .groups = "drop") %>%
+    pivot_wider(names_from = Significance, values_from = Count, values_fill = 0)
+
+  # Save filtered results
+ # saveRDS(get(paste0("all_random_counts_wwc_", st)), paste0("parsimony/all_random_counts_WWC_", toupper(st), ".rds"))
+ # write.csv(combined_results_wwc, paste0("parsimony/bootstrap_MP_significance_results_WWC_", toupper(st), ".csv"), row.names = FALSE)
+ # write.csv(significance_summary_wwc, paste0("parsimony/significance_summary_across_trees_WWC_", toupper(st), ".csv"), row.names = FALSE)
+}
+
+save_bootstrap_data_wwc("st131")
+save_bootstrap_data_wwc("st10")
+save_bootstrap_data_wwc("st38")
+save_bootstrap_data_wwc("st69")
+save_bootstrap_data_wwc("st1193")
+```
+
+#### 7.4.4.4 Load pre-generated ST results (WWC subset)
+
+Re-load saved `.csv` and `.rds` files for ST-specific transition analyses based only on wastewater and clinical isolates. These were generated in Section 7.4.4.3.
+
+```{r import-bootstrap-data-wwc-sts, eval=TRUE, warning=FALSE}
+
+combined_results_wwc_st131 <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST131.csv")
+combined_results_wwc_st10  <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST10.csv")
+combined_results_wwc_st38  <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST38.csv")
+combined_results_wwc_st69  <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST69.csv")
+combined_results_wwc_st1193 <- read.csv("parsimony/bootstrap_MP_significance_results_WWC_ST1193.csv")
+
+all_random_counts_wwc_st131 <- readRDS("parsimony/all_random_counts_WWC_ST131.rds")
+all_random_counts_wwc_st10  <- readRDS("parsimony/all_random_counts_WWC_ST10.rds")
+all_random_counts_wwc_st38  <- readRDS("parsimony/all_random_counts_WWC_ST38.rds")
+all_random_counts_wwc_st69  <- readRDS("parsimony/all_random_counts_WWC_ST69.rds")
+all_random_counts_wwc_st1193 <- readRDS("parsimony/all_random_counts_WWC_ST1193.rds")
+
+significance_summary_wwc_st131 <- read.csv("parsimony/significance_summary_across_trees_WWC_ST131.csv")
+significance_summary_wwc_st10  <- read.csv("parsimony/significance_summary_across_trees_WWC_ST10.csv")
+significance_summary_wwc_st38  <- read.csv("parsimony/significance_summary_across_trees_WWC_ST38.csv")
+significance_summary_wwc_st69  <- read.csv("parsimony/significance_summary_across_trees_WWC_ST69.csv")
+significance_summary_wwc_st1193 <- read.csv("parsimony/significance_summary_across_trees_WWC_ST1193.csv")
+```
+
+#### 7.4.4.5 Z-score calculation: observed vs null transitions (WWC STs)
+
+The function below calculates **standardized Z-scores** for each transition event by comparing observed counts to the mean and standard deviation of the null distribution. This provides a quantitative measure of deviation from randomness, per bootstrap tree.
+
+```{r z-score-function-wwc, warning=FALSE, eval=TRUE}
+
+compute_z_scores_wwc <- function(combined_results_wwc, all_random_counts_wwc) {
+  nonzero <- combined_results_wwc %>%
+    group_by(Transition) %>%
+    summarise(sum_obs = sum(Observed)) %>%
+    filter(sum_obs > 0) %>%
+    pull(Transition)
+
+  combined_results_wwc <- combined_results_wwc %>% filter(Transition %in% nonzero)
+
+  z_scores <- lapply(seq_along(all_random_counts_wwc), function(i) {
+    tree_name <- paste0("Tree_", i)
+    null_matrix <- all_random_counts_wwc[[tree_name]][, nonzero, drop = FALSE]
+    rand_mean <- colMeans(null_matrix)
+    rand_sd <- apply(null_matrix, 2, sd)
+
+    observed_df <- combined_results_wwc %>%
+      filter(Tree == tree_name, Transition %in% nonzero) %>%
+      arrange(match(Transition, nonzero)) %>%
+      pull(Observed)
+
+    data.frame(
+      Tree = tree_name,
+      Transition = gsub("_to_", " to ", nonzero),
+      Z_score = (observed_df - rand_mean) / rand_sd
+    )
+  }) %>% bind_rows()
+
+  return(z_scores)
+}
+```
+
+The following applies the `compute_z_scores()` function from earlier to the ST-specific results limited to the WWC subset.
+
+```{r z-score-computing-wwc-sts, warning=FALSE, eval=TRUE}
+
+z_scores_wwc_st131 <- compute_z_scores_wwc(combined_results_wwc_st131, all_random_counts_wwc_st131)
+z_scores_wwc_st10  <- compute_z_scores_wwc(combined_results_wwc_st10,  all_random_counts_wwc_st10)
+z_scores_wwc_st38  <- compute_z_scores_wwc(combined_results_wwc_st38,  all_random_counts_wwc_st38)
+z_scores_wwc_st69  <- compute_z_scores_wwc(combined_results_wwc_st69,  all_random_counts_wwc_st69)
+z_scores_wwc_st1193 <- compute_z_scores_wwc(combined_results_wwc_st1193, all_random_counts_wwc_st1193)
+
+```
+
+#### 7.4.4.6 Plot Z-score distributions of WWC subset (Figure S6)
+
+If the full-tree bootstrap analysis for clinical and wastewater isolates (Section 7.4.3) was not re-executed earlier in the notebook, the following chunk reloads the previously saved WWC-specific results. This is necessary to generate the combined Z-score plots shown below.
+
+```{r import-pre-generated-data-full-tree-wwc, warning=FALSE, eval=TRUE}
+
+combined_results_wwc <- read.csv("parsimony/bootstrap_MP_significance_results_wwc.csv")
+all_random_counts_wwc <- readRDS("parsimony/all_random_counts_wwc.rds")
+significance_summary_wwc <- read.csv("parsimony/significance_summary_across_trees_wwc.csv")
+```
+
+If full-tree results for clinical and wastewater isolates were just loaded, run this chunk to compute Z-scores using the same method as for individual STs.
+
+```{r format-pre-generated-data-full-wwc, warning=FALSE, eval=TRUE}
+# Apply the function to the full tree
+z_scores_wwc        <- compute_z_scores_wwc(combined_results_wwc, all_random_counts_wwc)
+```
+
+This final chunk combines Z-scores from the full WWC dataset and all major STs (restricted to wastewater and clinical sources) into a single, comparative visualization. Each boxplot shows the distribution of Z-scores across bootstrap trees for a specific transition. Red dashed lines mark the ±1.96 threshold, indicating 95% confidence bounds under the null model. `eval = FALSE` is set below to avoid re-running the code for plotting, as the figure has already been generated in Section 7.1.5. You can re-enable evaluation if you wish to regenerate the plot or apply modifications.
+
+```{r fig:plot-bootstrap-combined-single-analysis-wwc-an, fig.cap = "Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for wastewater and clinical isolates (WWC). Transitions between collection sources (clinics, wastewater) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees, considering only isolates from wastewater and clinical sources. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (WWC-only full dataset and the five dominant sequence types: ST131, ST10, ST38, ST69, ST1193, all restricted to WWC isolates). The legend indicates the number of isolates retained in each subset. Red dashed lines mark ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=8, fig.width=10, fig.lp=NULL, warning=FALSE, eval=FALSE}
+
+# Add group labels
+z_scores_wwc$Group <- "Wastewater and clinical isolates"
+z_scores_wwc_st131$Group <- "ST131"
+z_scores_wwc_st10$Group <- "ST10"
+z_scores_wwc_st38$Group <- "ST38"
+z_scores_wwc_st69$Group <- "ST69"
+z_scores_wwc_st1193$Group <- "ST1193"
+
+# Combine data
+z_scores_combined_wwc <- bind_rows(z_scores_wwc, z_scores_wwc_st131, z_scores_wwc_st10, z_scores_wwc_st38, z_scores_wwc_st69, z_scores_wwc_st1193)
+
+# Rename "livestock" to "cattle" in transition labels before formatting
+z_scores_combined_wwc$Transition <- gsub("livestock", "cattle", z_scores_combined_wwc$Transition)
+
+# Clean up and format transition labels
+z_scores_combined_wwc$Transition <- gsub("_to_", " → ", z_scores_combined_wwc$Transition)
+
+# Ensure transitions and group order
+z_scores_combined_wwc$Transition <- factor(z_scores_combined_wwc$Transition,
+                                       levels = rev(sort(unique(z_scores_combined_wwc$Transition))))
+z_scores_combined_wwc$Group <- factor(z_scores_combined_wwc$Group, levels = c("ST1193", "ST69", "ST38", "ST10","ST131", "Wastewater and clinical isolates"))
+
+# Ensure every combination is represented
+z_scores_combined_full_wwc <- expand.grid(
+  Transition = unique(z_scores_combined_wwc$Transition),
+  Group = levels(z_scores_combined_wwc$Group)
+) %>%
+  left_join(z_scores_combined_wwc, by = c("Transition", "Group"))
+
+
+# Order transitions and group
+z_scores_combined_full_wwc$Transition <- factor(z_scores_combined_full_wwc$Transition,
+                                            levels = rev(sort(unique(z_scores_combined_full_wwc$Transition))))
+z_scores_combined_full_wwc$Group <- factor(z_scores_combined_full_wwc$Group,
+                                       levels = c("ST1193","ST69","ST38", "ST10", "ST131", "Wastewater and clinical isolates"))
+
+# Get unique levels of transitions
+trans_levels <- levels(z_scores_combined_full_wwc$Transition)
+
+# Determine where to place lines (between factors, i.e., at integer positions)
+vline_positions <- seq(1.5, length(trans_levels) - 0.5, by = 1)
+
+# Plot
+ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
+  geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.1),
+               outlier.shape = NA, width = 1, linewidth = 0.2) +
+  geom_hline(yintercept = c(-1.96, 1.96), linetype = "dashed", color = "red", linewidth = 0.4) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("Wastewater and clinical isolates" = "skyblue", "ST131" = "#f7d080", "ST10" = "#f0bd9bff", 
+               "ST38" = "#ab7d5dff", "ST69" = "#afbf8dff", "ST1193" = "#9cafaaff"),
+    labels = c("Wastewater and clinical isolates" = "WWC (n=708)", 
+               "ST131" = "ST131 (n=194)", 
+               "ST10" = "ST10 (n=60)", 
+               "ST38" = "ST38 (n=49)", 
+               "ST69" = "ST69 (n=52)", 
+               "ST1193" = "ST1193 (n=44)")
+  ) +
+  scale_color_manual(
+    values = c("Wastewater and clinical isolates" = "#3399cc", "ST131" = "#d6b060", "ST10" = "#d09b79", 
+               "ST38" = "#8c6249", "ST69" = "#8e9e6d", "ST1193" = "#7c8e8a"),
+    labels = c("Wastewater and clinical isolates" = "WWC (n=708)", 
+               "ST131" = "ST131 (n=194)", 
+               "ST10" = "ST10 (n=60)", 
+               "ST38" = "ST38 (n=49)", 
+               "ST69" = "ST69 (n=52)", 
+               "ST1193" = "ST1193 (n=44)")
+  ) +
+  guides(
+    fill = guide_legend(title = "Dataset (n of isolates)", reverse = TRUE),
+    color = guide_legend(title = "Dataset (n of isolates)", reverse = TRUE)
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 12, color = "black"),
+    axis.text.x = element_text(size = 12, color = "black"),
+    axis.title = element_text(size = 14, color = "black"),
+    legend.position = "bottom",
+    legend.justification = "center",
+    legend.box = "horizontal",
+    legend.text = element_text(size = 12, color = "black"),     
+    legend.title = element_text(size = 12, color = "black"),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank()   
+  ) +
+  geom_vline(xintercept = vline_positions, linetype = "solid", color = "black", size = 0.2)
+```
+
+### 7.4.5 Table S13
+
+```{r tableS13, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Helper function to clean and standardize WWC significance data frames
+standardize_significance_wwc_df <- function(df_wwc, dataset_name) {
+  colnames(df_wwc) <- gsub("\\.+", ".", colnames(df_wwc))
+  colnames(df_wwc) <- trimws(colnames(df_wwc))
+  colnames(df_wwc) <- sub(".*Transition.*", "Transition", colnames(df_wwc))
+  colnames(df_wwc) <- sub("Below.*", "Below 95% CI", colnames(df_wwc))
+  colnames(df_wwc) <- sub("Within.*", "Within 95% CI", colnames(df_wwc))
+  colnames(df_wwc) <- sub("Above.*", "Above 95% CI", colnames(df_wwc))
+  if (!"Below 95% CI" %in% colnames(df_wwc))  df_wwc$`Below 95% CI`  <- 0
+  if (!"Within 95% CI" %in% colnames(df_wwc)) df_wwc$`Within 95% CI` <- 0
+  if (!"Above 95% CI" %in% colnames(df_wwc))  df_wwc$`Above 95% CI`  <- 0
+  df_wwc$Dataset <- dataset_name
+  df_wwc <- df_wwc[, c("Dataset", "Transition", "Below 95% CI", "Within 95% CI", "Above 95% CI")]
+
+  return(df_wwc)
+}
+
+# Standardize all WWC datasets
+df_full_wwc     <- standardize_significance_wwc_df(significance_summary_wwc,        "Full phylogeny")
+df_st131_wwc    <- standardize_significance_wwc_df(significance_summary_wwc_st131,  "ST131")
+df_st10_wwc     <- standardize_significance_wwc_df(significance_summary_wwc_st10,   "ST10")
+df_st38_wwc     <- standardize_significance_wwc_df(significance_summary_wwc_st38,   "ST38")
+df_st69_wwc     <- standardize_significance_wwc_df(significance_summary_wwc_st69,   "ST69")
+df_st1193_wwc   <- standardize_significance_wwc_df(significance_summary_wwc_st1193, "ST1193")
+
+# Combine all
+tableS13 <- bind_rows(
+  df_full_wwc,
+  df_st131_wwc,
+  df_st10_wwc,
+  df_st38_wwc,
+  df_st69_wwc,
+  df_st1193_wwc
+)
+
+# Clean transition labels
+tableS13$Transition <- gsub("_to_", " to ", tableS13$Transition)
+
+# Display Table S13
+tableS13 %>%
+  kable(
+    format = "html",
+    longtable = TRUE,
+    booktabs = TRUE,
+    escape = FALSE,
+    caption = "Table S13: Significance summary of transition frequencies across 1,000 bootstrap phylogenies based on isolates from wastewater and clinical sources only (WWC). The table reports the number of bootstrap trees in which observed transitions between wastewater and clinics fell below, within, or above the central 95% confidence interval (CI) of the null distribution from 1,000 random permutations. Results are shown for the full WWC phylogeny and for the five most dominant sequence types (ST131, ST10, ST38, ST69, ST1193). Transitions falling below the 95% CI (column 'Below 95% CI') indicate significantly fewer transitions than expected under the null model."
+  ) %>%
+  kable_styling(
+    full_width = FALSE,
+    position = "center",
+    latex_options = c("hold_position", "repeat_header")
+  )
+
+# Save to file
+#write.csv(tableS13, "./tables/TableS13.csv", row.names = FALSE)
+```
