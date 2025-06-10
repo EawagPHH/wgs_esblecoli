@@ -24,15 +24,15 @@ output:
 
 This R Markdown notebook documents the full analysis pipeline for assessing the genomic diversity, resistance gene content, and phylogenetic relationships of extended-spectrum β-lactamase (ESBL)-producing *Escherichia coli* isolated from wastewater, clinical, livestock, and wildlife sources in Switzerland. The workflow includes:
 
--   Sequencing Quality and Metadata Integration: Summary of sequencing output, quality control, and sample inclusion criteria (Table S2).
+-   Sequencing Quality and Metadata Integration: Summary of sequencing output, quality control, and sample inclusion criteria (Table S1).
 
--   Genomic Diversity: Characterization of *E. coli* phylogroups and sequence types (STs) across compartments (Tables S5–S6).
+-   Genomic Diversity: Characterization of *E. coli* phylogroups and sequence types (STs) across compartments (Tables S4–S5).
 
--   Antibiotic Resistance Genes (ARGs): Distribution of β-lactamase and non-β-lactamase ARGs across sources (Table S7, Fig. 3, Fig. S2, Fig. S7), including analyses of multidrug resistance patterns (Table S8) and regional differences in ARG abundance (Table S9, Fig. S3).
+-   Antibiotic Resistance Genes (ARGs): Distribution of β-lactamase and non-β-lactamase ARGs across sources (Table S6, Fig. 3, Extended Data Fig. 1, Fig. S4), including analyses of multidrug resistance patterns (Extended Data Table 2) and regional differences in ARG abundance (Table S7, Extended Data Fig. 2).
 
 -   Genetic Relatedness: SNP-based similarity analysis to identify closely related isolates, within and between compartments, across defined SNP thresholds (Tables S10–S11, Fig. 4).
 
--   Ancestral State Reconstruction and Transition Analyses: Maximum parsimony-based reconstruction of transmission events between compartments across a consensus tree and 1,000 bootstrap phylogenies. Observed transitions are compared against null distributions generated via randomization (Tables S12–S13, Fig. 5, Fig. S5–S6).
+-   Ancestral State Reconstruction and Transition Analyses: Maximum parsimony-based reconstruction of transmission events between compartments across a consensus tree and 1,000 bootstrap phylogenies. Observed transitions are compared against null distributions generated via randomization (Tables S12–S13, Fig. 5, Exteded Data Fig. 3, Fig. S3).
 
 -   ST-Specific and Compartment-Restricted Analyses: Targeted transition analyses are conducted for the five most prevalent STs (ST131, ST10, ST38, ST69, ST1193) and on a subset including only wastewater and clinical isolates to assess directional signals in transmission dynamics.
 
@@ -182,7 +182,7 @@ get_count <- function(df, var, value) {
 }
 
 # STEP 6: Build final summary table
-tableS2 <- tibble(
+TableS1 <- tibble(
   Category = c(
     "Total unique ESBL-E. coli isolates",
     "From wastewater",
@@ -237,15 +237,15 @@ tableS2 <- tibble(
   )
 )
 
-tableS2$N[is.na(tableS2$N)] <- 0
+TableS1$N[is.na(TableS1$N)] <- 0
 
 # STEP 7: Display
-tableS2 %>%
+TableS1 %>%
   kable(
     format = "html",
     longtable = TRUE,
     booktabs = TRUE,
-    caption = "Table S2: Comprehensive summary of ESBL-<i>E. coli</i> sequencing outcomes, quality filtering, control types by strain, and resequencing success across batches."
+    caption = "Table S1: Comprehensive summary of ESBL-<i>E. coli</i> sequencing outcomes, quality filtering, control types by strain, and resequencing success across batches."
   ) %>%
   kable_styling(
     latex_options = c("hold_position", "repeat_header"),
@@ -254,7 +254,7 @@ tableS2 %>%
   )
 
 # Save the final sequencing summary table
-#write.csv(tableS2, "./tables/TableS2.csv", row.names = FALSE)
+#write.csv(TableS1, "./tables/TableS1.csv", row.names = FALSE)
 ```
 
 ------------------------------------------------------------------------
@@ -269,7 +269,7 @@ sample_metadata <- read.csv("sample_annotations.csv", header=TRUE)
 
 ## 4.2 Phylogroup diversity
 
-```{r tableS5-phylogroup-summary, warning=FALSE, message=FALSE, eval=TRUE}
+```{r TableS4-phylogroup-summary, warning=FALSE, message=FALSE, eval=TRUE}
 
 # Count total isolates per source for denominator
 source_totals <- sample_metadata %>%
@@ -279,8 +279,8 @@ source_totals <- sample_metadata %>%
 
 total_n <- nrow(sample_metadata %>% filter(Phylogroup != "", Phylogroup != "failed"))
 
-# Table S5 generation
-tableS5 <- sample_metadata %>%
+# Table S4 generation
+TableS4 <- sample_metadata %>%
   filter(Phylogroup != "", Phylogroup != "failed") %>%
   group_by(Phylogroup) %>%
   summarise(
@@ -313,14 +313,14 @@ tableS5 <- sample_metadata %>%
   ) %>%
   arrange(Phylogroup)
 
-# Display Table S5
-tableS5 %>%
+# Display Table S4
+TableS4 %>%
   kable(
     format = "html",
     longtable = TRUE,
     booktabs = TRUE,
     escape = FALSE,
-    caption = "Table S5: Distribution of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> isolates across nine phylogroups, determined using the EzClermont protocol, stratified by source."
+    caption = "Table S4: Distribution of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> isolates across nine phylogroups, determined using the EzClermont protocol, stratified by source."
   ) %>%
   kable_styling(
     latex_options = c("hold_position", "repeat_header"),
@@ -329,16 +329,16 @@ tableS5 %>%
   )
 
 # Save to file
-#write.csv(tableS5, "./tables/TableS5.csv", row.names = FALSE)
+#write.csv(TableS4, "./tables/TableS4.csv", row.names = FALSE)
 
 ```
 
 ## 4.3 Sequence type (ST) diversity
 
-```{r tableS6-ST-summary, message=FALSE, warning=FALSE, eval=TRUE}
+```{r TableS5-ST-summary, message=FALSE, warning=FALSE, eval=TRUE}
 
-# Generate Table S6: Sequence type distribution by source
-tableS6 <- sample_metadata %>%
+# Generate Table S5: Sequence type distribution by source
+TableS5 <- sample_metadata %>%
   filter(!is.na(ST), ST != "failed") %>%
   group_by(ST) %>%
   dplyr::summarise(
@@ -371,14 +371,14 @@ tableS6 <- sample_metadata %>%
     `Number (percentage %) of wildlife isolates`
   )
 
-# Display Table S6
-tableS6 %>%
+# Display Table S5
+TableS5 %>%
   kable(
     format = "html",
     longtable = TRUE,
     booktabs = TRUE,
     escape = FALSE,
-    caption = "Table S6: Distribution of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> isolates by sequence type (ST), identified by the analysis of seven housekeeping genes of the multilocus sequence typing (MLST) Achtman scheme using MLST v.2.16.1 (https://github.com/tseemann/mlst). The table includes the number and percentage of isolates for each ST."
+    caption = "Table S5: Distribution of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> isolates by sequence type (ST), identified by the analysis of seven housekeeping genes of the multilocus sequence typing (MLST) Achtman scheme using MLST v.2.16.1 (https://github.com/tseemann/mlst). The table includes the number and percentage of isolates for each ST."
   ) %>%
   kable_styling(
     latex_options = c("hold_position", "repeat_header"),
@@ -387,7 +387,7 @@ tableS6 %>%
   )
 
 # Save to file
-#write.csv(tableS6, "./tables/TableS6.csv", row.names = FALSE)
+#write.csv(TableS5, "./tables/TableS5.csv", row.names = FALSE)
 ```
 
 ------------------------------------------------------------------------
@@ -504,7 +504,7 @@ table_betalactamase %>%
     format = "html",  # use "latex" if rendering PDF
     longtable = TRUE,
     booktabs = TRUE,
-    caption = "Table S7: Distribution of β-lactamase genes among extended-spectrum β-lactamase (ESBL)-producing Escherichia coli isolates from different sources. The table lists detected β-lactamase genes, their presence across sources (clinics, cattle, wastewater, and wildlife), the percentage of isolates carrying each gene, and the corresponding number of isolates. Gene detection was performed by blasting assembled genomes against the Comprehensive Antibiotic Resistance Database (CARD, accessed 4th November 2023) using Abricate v1.0.1."
+    caption = "Table S6: Distribution of β-lactamase genes among extended-spectrum β-lactamase (ESBL)-producing Escherichia coli isolates from different sources. The table lists detected β-lactamase genes, their presence across sources (clinics, cattle, wastewater, and wildlife), the percentage of isolates carrying each gene, and the corresponding number of isolates. Gene detection was performed by blasting assembled genomes against the Comprehensive Antibiotic Resistance Database (CARD, accessed 4th November 2023) using Abricate v1.0.1."
   ) %>%
   kable_styling(
     latex_options = c("hold_position", "repeat_header"),
@@ -513,13 +513,13 @@ table_betalactamase %>%
   )
 
 # Save the final betalactamase table to CSV
-#write.csv(table_betalactamase, "./tables/TableS7.csv", row.names = FALSE)
+#write.csv(table_betalactamase, "./tables/TableS6.csv", row.names = FALSE)
 
 ```
 
 ### 5.3.3 Heatmap of beta-lactamase genes
 
-```{r plot-figS2, fig.cap = "Fig. S2: Co-occurrence of β-lactamase genes across ESBL-producing *Escherichia coli* isolates stratified by source (clinics, cattle, wastewater, and wildlife). The heatmap displays individual isolates (rows) and β-lactamase genes (columns). Each tile indicates the presence of a specific gene in a given isolate identified using the Comprehensive Antibiotic Resistance Database (CARD). Genes are grouped and color-coded by gene family: CTX-M (orange), TEM (skyblue), SHV (yellow), OXA (red), and Other (grey).", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
+```{r plot-extendedDataFig1, fig.cap = "Extended Data Fig. 1: Co-occurrence of β-lactamase genes across ESBL-producing *Escherichia coli* isolates stratified by source (clinics, cattle, wastewater, and wildlife). The heatmap displays individual isolates (rows) and β-lactamase genes (columns). Each tile indicates the presence of a specific gene in a given isolate identified using the Comprehensive Antibiotic Resistance Database (CARD). Genes are grouped and color-coded by gene family: CTX-M (orange), TEM (skyblue), SHV (yellow), OXA (red), and Other (grey).", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
 
 
 # Clean data and remove genes with all NAs
@@ -583,7 +583,7 @@ heatmap_long <- heatmap_long %>%
   ))
 
 # Plot heatmaps faceted by Source
-figS2 = ggplot(heatmap_long %>% filter(Presence == 1), aes(x = Gene, y = Sample)) +
+extendedDataFig1 = ggplot(heatmap_long %>% filter(Presence == 1), aes(x = Gene, y = Sample)) +
   geom_tile(aes(fill = FamilyLabel), color = "grey90") +
   scale_fill_manual(
     values = legend_family_colors,
@@ -611,10 +611,10 @@ theme(
     y = "Isolate"
   )
 
-print(figS2)
+print(extendedDataFig1)
 
 # save figure
-#ggsave("./figures/FigureS2.pdf", plot = figS2, width = 11.69, height = 8.27 , units = "in")
+#ggsave("./figures/ExtendedDataFig1.pdf", plot = extendedDataFig1, width = 11.69, height = 8.27 , units = "in")
 ```
 
 ## 5.4 Non-beta-lactamase genes
@@ -711,9 +711,9 @@ colnames(table_nonbetalactamase) <- gsub("_", " ", colnames(table_nonbetalactama
 colnames(table_nonbetalactamase)[-1] <- paste0(colnames(table_nonbetalactamase)[-1], " (n; %)")
 ```
 
-### 5.4.3 Plot FigureS7
+### 5.4.3 Plot FigureS4
 
-```{r fig:figureS7, fig.cap = "Fig. S7: Distribution of antibiotic resistance genes across sources in ESBL-producing *E. coli* isolates. This figure shows the proportion of ESBL-*E. coli* isolates carrying genes associated with various antibiotic resistance classes, based on annotations from the Comprehensive Antibiotic Resistance Database (CARD). All resistance genes, excluding β-lactamases, that were detected in at least 5% of isolates from any source are displayed. Each panel represents a different antibiotic class, with colors indicating the sources: clinics (pink), cattle (gold), wildlife (green), and wastewater (blue). Antibiotic resistance classes include aminocoumarins, aminoglycosides, diaminopyrimidines, fluoroquinolones, lincosamides, macrolides, nitroimidazoles, peptides, phenicols, phosphonic acids, rifamycins, sulfonamides, tetracyclines, streptogramins, and disinfectants. When a gene is annotated as conferring resistance to multiple antibiotic classes, it is displayed in all relevant facets. Efflux pumps represent genes conferring resistance to multiple antibiotic classes by actively exporting antibiotics from bacterial cells. Each bar shows the proportion of isolates from a specific source carrying the corresponding gene.", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, message=FALSE, eval=TRUE}
+```{r fig:FigureS4, fig.cap = "Fig. S4: Distribution of antibiotic resistance genes across sources in ESBL-producing *E. coli* isolates. This figure shows the proportion of ESBL-*E. coli* isolates carrying genes associated with various antibiotic resistance classes, based on annotations from the Comprehensive Antibiotic Resistance Database (CARD). All resistance genes, excluding β-lactamases, that were detected in at least 5% of isolates from any source are displayed. Each panel represents a different antibiotic class, with colors indicating the sources: clinics (pink), cattle (gold), wildlife (green), and wastewater (blue). Antibiotic resistance classes include aminocoumarins, aminoglycosides, diaminopyrimidines, fluoroquinolones, lincosamides, macrolides, nitroimidazoles, peptides, phenicols, phosphonic acids, rifamycins, sulfonamides, tetracyclines, streptogramins, and disinfectants. When a gene is annotated as conferring resistance to multiple antibiotic classes, it is displayed in all relevant facets. Efflux pumps represent genes conferring resistance to multiple antibiotic classes by actively exporting antibiotics from bacterial cells. Each bar shows the proportion of isolates from a specific source carrying the corresponding gene.", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, message=FALSE, eval=TRUE}
 
 # Expand rows where Class contains multiple values (split on "_")
 gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
@@ -799,7 +799,7 @@ nonbl_plot <- ggplot(gene_counts_nonbl_by_source, aes(y = Proportion, x = Gene, 
 print(nonbl_plot)
 
 # Save non-beta-lactamase ARGs figure
-#ggsave("./figures/FigureS7.pdf", plot = nonbl_plot, width =11.69 , height =8.27  , units = "in")
+#ggsave("./figures/FigureS4.pdf", plot = nonbl_plot, width =11.69 , height =8.27  , units = "in")
 ```
 
 ### 5.4.5 Filter for clinically relevant non-beta-lactamase
@@ -889,7 +889,7 @@ presence_class %>%
 
 ## 5.5 Plot Figure 3
 
-```{r fig:figure3, fig.cap = "Fig. 3: Distribution of β-lactamase and other antibiotic resistance genes across sources. (A) Proportion of isolates from clinics (pink), cattle (gold), wildlife (green), and wastewater (blue) carrying specific β-lactamase genes, identified using the Comprehensive Antibiotic Resistance Database (CARD). Each bar represents the proportion of isolates within each source harboring the corresponding gene. (B) Proportion of isolates carrying resistance genes from other antibiotic classes, identified using CARD. Only genes present in ≥5% of isolates in at least one source are shown. Antibiotic classes include aminoglycosides, diaminopyrimidines, fluoroquinolones, lincosamides, macrolides, phenicols, phosphonic acids, rifamycins, sulfonamides, tetracyclines, and streptogramins. ermB is displayed in the lincosamides, streptogramins, and macrolides panels because it was annotated as conferring resistance to all three antibiotic classes. For an expanded CARD analysis, see Fig. S4.", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, message=FALSE, eval=TRUE}
+```{r fig:figure3, fig.cap = "Fig. 3: Distribution of β-lactamase and other antibiotic resistance genes across sources. (A) Proportion of isolates from clinics (pink), cattle (gold), wildlife (green), and wastewater (blue) carrying specific β-lactamase genes, identified using the Comprehensive Antibiotic Resistance Database (CARD). Each bar represents the proportion of isolates within each source harboring the corresponding gene. (B) Proportion of isolates carrying resistance genes from other antibiotic classes, identified using CARD. Only genes present in ≥5% of isolates in at least one source are shown. Antibiotic classes include aminoglycosides, diaminopyrimidines, fluoroquinolones, lincosamides, macrolides, phenicols, phosphonic acids, rifamycins, sulfonamides, tetracyclines, and streptogramins. ermB is displayed in the lincosamides, streptogramins, and macrolides panels because it was annotated as conferring resistance to all three antibiotic classes. For an expanded CARD analysis, see Fig. S2.", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, message=FALSE, eval=TRUE}
 
 # Create new gene order based on maximum prevalence across *any* source
 gene_order <- bl_counts_by_source %>%
@@ -1066,7 +1066,7 @@ mdr_final_table %>%
     format = "html",  # use "html" if rendering to HTML instead
     booktabs = TRUE,
     longtable = TRUE,
-    caption = "Table S8: Distribution of isolates by number of drug resistance classes. The table shows the number and percentage of isolates resistant to varying numbers of drug classes, based on genes detected from the Comprehensive Antibiotic Resistance Database (CARD, accessed 4th November 2023). Multidrug resistance is abbreviated as “MDR”, and is defined as resistance to three or more classes. Classes considered were: aminoglycosides, β-lactamases, fluoroquinolones, diaminopyrimidines, macrolides, sulfonamides, tetracyclines, phenicols, phosphonic acids, lincosamides, and rifamycins."
+    caption = "Extended Data Table 2: Distribution of isolates by number of drug resistance classes. The table shows the number and percentage of isolates resistant to varying numbers of drug classes, based on genes detected from the Comprehensive Antibiotic Resistance Database (CARD, accessed 4th November 2023). Multidrug resistance is abbreviated as “MDR”, and is defined as resistance to three or more classes. Classes considered were: aminoglycosides, β-lactamases, fluoroquinolones, diaminopyrimidines, macrolides, sulfonamides, tetracyclines, phenicols, phosphonic acids, lincosamides, and rifamycins."
   ) %>%
   kable_styling(
     latex_options = c("hold_position", "repeat_header"),
@@ -1075,7 +1075,7 @@ mdr_final_table %>%
   )
 
 # Optional: save as CSV
-#write.csv(mdr_final_table, "./tables/TableS8.csv", row.names = FALSE)
+#write.csv(mdr_final_table, "./tables/ExtendedDataTable2.csv", row.names = FALSE)
 ```
 
 ## 5.7 ARGs per region and source
@@ -1208,7 +1208,7 @@ table_s9 %>%
     format = "html",  # or "html" if rendering to HTML
     longtable = TRUE,
     booktabs = TRUE,
-    caption = "Table S9: Statistical analysis of differences in antibiotic resistance genes (ARGs) number among sources within different regions of Switzerland. The first part of the table presents the results of the Kruskal-Wallis test, indicating the chi-square (X²) and p-value for each region: Eastern Switzerland, Midland, Lake Geneva Region, Ticino, and Zurich. The second part of the table shows the results of Dunn’s test with Bonferroni adjustment for pairwise comparisons across all tests, including the Z-score, p-value, and adjusted p-value for each comparison between sources (clinics, cattle, wastewater, and wildlife)."
+    caption = "Table S7: Statistical analysis of differences in antibiotic resistance genes (ARGs) number among sources within different regions of Switzerland. The first part of the table presents the results of the Kruskal-Wallis test, indicating the chi-square (X²) and p-value for each region: Eastern Switzerland, Midland, Lake Geneva Region, Ticino, and Zurich. The second part of the table shows the results of Dunn’s test with Bonferroni adjustment for pairwise comparisons across all tests, including the Z-score, p-value, and adjusted p-value for each comparison between sources (clinics, cattle, wastewater, and wildlife)."
   ) %>%
   kable_styling(
     latex_options = c("hold_position", "repeat_header"),
@@ -1217,9 +1217,9 @@ table_s9 %>%
   )
 ```
 
-```{r save-tables9, warning=FALSE, message=FALSE, eval=FALSE}
+```{r save-TableS7, warning=FALSE, message=FALSE, eval=FALSE}
 # Define file path
-#output_path <- "./tables/TableS9.csv"
+#output_path <- "./tables/TableS7.csv"
 
 # Open a connection to the file
 fileConn <- file(output_path, open = "wt")
@@ -1241,9 +1241,9 @@ write.table(dunn_results_formatted, fileConn, sep = ",", row.names = FALSE, col.
 close(fileConn)
 ```
 
-### 5.7.3 Plot FigureS3
+### 5.7.3 Plot ExtendedDataFig2
 
-```{r plot-figS3, fig.cap = "Fig. S3: Regional variation in antibiotic resistance genes (ARGs) distribution across clinical, cattle, wastewater, and wildlife sources in Switzerland. Boxplots show the number of ARGs detected per isolate from clinics (pink), cattle (gold), wildlife (green), and wastewater (blue) across regions of Switzerland. Each panel represents a distinct region, and each boxplot reflects the distribution of ARG counts within a specific source in that region. Only sources with at least three isolates per region are included. P-values from the Kruskal-Wallis test are indicated in the bottom left corner of each panel. Significant differences (p-value < 0.05) are marked with *. When p-value = NA, the test was not performed due to the presence of only one source category in that region.", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
+```{r plot-ExtendedDataFig2, fig.cap = "Extended Data Fig. 2: Regional variation in antibiotic resistance genes (ARGs) distribution across clinical, cattle, wastewater, and wildlife sources in Switzerland. Boxplots show the number of ARGs detected per isolate from clinics (pink), cattle (gold), wildlife (green), and wastewater (blue) across regions of Switzerland. Each panel represents a distinct region, and each boxplot reflects the distribution of ARG counts within a specific source in that region. Only sources with at least three isolates per region are included. P-values from the Kruskal-Wallis test are indicated in the bottom left corner of each panel. Significant differences (p-value < 0.05) are marked with *. When p-value = NA, the test was not performed due to the presence of only one source category in that region.", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
 
 # Define custom colors
 custom_colors_friendly <- c("clinics"= "#CC79A7", "wastewater" ="#56B4E9", "wildlife" ="#009E73", "cattle"="#F0E442")
@@ -1268,7 +1268,7 @@ label_coords <- args_region %>%
   mutate(label = ifelse(is.na(label), "p-value = NA", label))
 
 # Create plot
-figS3 <- ggplot(args_region, aes(x = Source, y = args, fill = Source)) +
+ExtendedDataFig2 <- ggplot(args_region, aes(x = Source, y = args, fill = Source)) +
   geom_boxplot(data = args_region_filtered, aes(group = interaction(Source, Region)),
                fill = NA, color = "black", outlier.shape = NA) +
   geom_jitter(aes(color = Source), width = 0.2, height = 0, alpha = 0.7, size=2) +
@@ -1300,10 +1300,10 @@ figS3 <- ggplot(args_region, aes(x = Source, y = args, fill = Source)) +
             hjust = 0, vjust = 0, size = 4)
 
 
-print(figS3)
+print(ExtendedDataFig2)
 
 # save figure
-#ggsave("./figures/FigureS3.pdf", plot = figS3, width = 11.69, height = 8.27 , units = "in")
+#ggsave("./figures/ExtendedDataFig2.pdf", plot = ExtendedDataFig2, width = 11.69, height = 8.27 , units = "in")
 ```
 
 ------------------------------------------------------------------------
@@ -1410,26 +1410,26 @@ all_membership <- data.frame(
 cluster_map <- left_join(all_membership, representative_map, by = "Cluster", suffix = c("_Original", "_Retained"))
 
 # Filter out retained isolates
-tableS14 <- cluster_map %>%
+TableS11 <- cluster_map %>%
   filter(Isolate_Original != Isolate_Retained) %>%
   rename(Removed_Isolate = Isolate_Original, Retained_Isolate = Isolate_Retained)
 
 # Add metadata (Source and Date)
-tableS14 <- tableS14 %>%
+TableS11 <- TableS11 %>%
   left_join(sample_metadata, by = c("Removed_Isolate" = "Sample")) %>%
   select(Removed_Isolate, Retained_Isolate, Source, Date) %>%
   arrange(Removed_Isolate)
 
 # Clean column names
-colnames(tableS14) <- c("Removed Isolate", "Retained Isolate", "Compartment", "Collection Date")
+colnames(TableS11) <- c("Removed Isolate", "Retained Isolate", "Compartment", "Collection Date")
 
 # Display nicely formatted table
-tableS14 %>%
+TableS11 %>%
   kable(
     format = "html",
     longtable = TRUE,
     booktabs = TRUE,
-    caption = "Table S14: Identical ESBL-<i>E. coli</i> isolates (0 SNPs) originating from the same sample and collapsed into a single representative. For each case, the retained isolate is listed alongside the collapsed identical sequences, source compartment, and collection date. This includes, for example, multiple clonal isolates obtained from the same wildlife or livestock fecal sample, or from the same wastewater sample."
+    caption = "Table S11: Identical ESBL-<i>E. coli</i> isolates (0 SNPs) originating from the same sample and collapsed into a single representative. For each case, the retained isolate is listed alongside the collapsed identical sequences, source compartment, and collection date. This includes, for example, multiple clonal isolates obtained from the same wildlife or livestock fecal sample, or from the same wastewater sample."
   ) %>%
   kable_styling(
     latex_options = c("hold_position", "repeat_header"),
@@ -1438,7 +1438,7 @@ tableS14 %>%
   )
 
 # Save to file
-#write.csv(tableS14, "./tables/TableS14.csv", row.names = FALSE)
+#write.csv(TableS11, "./tables/TableS11.csv", row.names = FALSE)
 ```
 
 ## 6.4 Count clonal pairs
@@ -1595,25 +1595,25 @@ header_c <- tibble(
 )
 
 # Combine all tables into a single data frame
-tableS10 <- bind_rows(
+ExtendedDataTable3 <- bind_rows(
   header_a, tableS10a,
   header_b, tableS10b,
   header_c, tableS10c
 )
 
 # Save to file
-#write.csv(tableS10, "./tables/TableS10.csv", row.names = FALSE)
+#write.csv(ExtendedDataTable3, "./tables/ExtendedDataTable3.csv", row.names = FALSE)
 
 # Display as kable
-tableS10 %>%
+ExtendedDataTable3 %>%
   kable(
     format = "html",
     booktabs = TRUE,
     escape = FALSE,
-    caption = "Table S10: Genetically similar <i>Escherichia coli</i> isolate pairs, including extended-spectrum β-lactamase (ESBL)-producing strains, detected within and between compartments across SNP thresholds (0, 1–20, and 21–100 SNPs). The upper section reports total pair counts by comparison type (within vs. between). The middle and lower sections show the percentage and count (n) of genetically similar pairs within and between compartments, respectively. Percentages are calculated relative to the total number of possible isolate pairs within or between the corresponding compartments. Analysis was performed in R (v4.1.1)."
+    caption = "Extended Data Table 3: Genetically similar <i>Escherichia coli</i> isolate pairs, including extended-spectrum β-lactamase (ESBL)-producing strains, detected within and between compartments across SNP thresholds (0, 1–20, and 21–100 SNPs). The upper section reports total pair counts by comparison type (within vs. between). The middle and lower sections show the percentage and count (n) of genetically similar pairs within and between compartments, respectively. Percentages are calculated relative to the total number of possible isolate pairs within or between the corresponding compartments. Analysis was performed in R (v4.1.1)."
   ) %>%
   kable_styling(full_width = FALSE, position = "center") %>%
-  row_spec(which(tableS10$Comparison %in% c(
+  row_spec(which(ExtendedDataTable3$Comparison %in% c(
     "Number of genetically similar pairs",
     "Percentage of genetically similar pairs within compartments (%)",
     "Percentage of genetically similar pairs between compartments (%)"
@@ -1667,7 +1667,7 @@ zero_snp_metadata <- zero_snp_metadata %>%
 rows_between_compartments <- which(zero_snp_metadata$`Compartment sample 1` != zero_snp_metadata$`Compartment sample 2`)
 
 # Save as CSV
-#write.csv(zero_snp_metadata, "./tables/TableS11.csv", row.names = FALSE)
+#write.csv(zero_snp_metadata, "./tables/TableS8.csv", row.names = FALSE)
 
 # Render the table and apply grey shading to between-compartment rows
 zero_snp_metadata %>%
@@ -1676,7 +1676,7 @@ zero_snp_metadata %>%
     booktabs = TRUE,
     longtable = TRUE,
     escape = FALSE,
-    caption = "Table S11: Isolate pairs of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> that were genetically identical (0 SNPs). For each pair, the source compartment, sampling date, and region are shown. The table includes both within-compartment and between-compartment matches; rows shaded in gray represent isolate pairs originating from different compartments."
+    caption = "Table S8: Isolate pairs of extended-spectrum β-lactamase (ESBL)-producing <i>Escherichia coli</i> that were genetically identical (0 SNPs). For each pair, the source compartment, sampling date, and region are shown. The table includes both within-compartment and between-compartment matches; rows shaded in gray represent isolate pairs originating from different compartments."
   ) %>%
   kable_styling(full_width = FALSE, position = "center") %>%
   row_spec(rows_between_compartments, background = "green")
@@ -1991,11 +1991,11 @@ print(figure5)
 #ggsave("figures/Figure5.pdf", plot = figure5, width = 8.27, height = 11.69, units = "in")
 ```
 
-### 7.1.4 Plot Figure S4
+### 7.1.4 Plot Figure S2
 
 This chunk visualizes the null distributions of transitions from the consensus tree randomization. Histograms show how often each transition count occurred under 1000 random permutations, with red and dashed black lines marking the observed count and 95% confidence intervals, respectively.
 
-```{r fig:figureS4, fig.cap = "Fig. S4: Distribution of observed and randomized transition counts on the consensus phylogeny. Transitions between collection sources (clinics, wastewater, wildlife, cattle) were inferred using maximum parsimony ancestral state reconstruction on the consensus maximum likelihood phylogenetic tree of 762 isolates. For each transition type, tip states were randomized 1,000 times (preserving source frequencies) to generate null distributions of transition counts. Each facet shows the distribution of transition counts from the null model (histogram) for a specific transition type. Solid red lines indicate the observed number of transitions; dashed black lines mark the central 95% confidence interval from the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2).", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, eval=TRUE}
+```{r fig:FigureS2, fig.cap = "Fig. S2: Distribution of observed and randomized transition counts on the consensus phylogeny. Transitions between collection sources (clinics, wastewater, wildlife, cattle) were inferred using maximum parsimony ancestral state reconstruction on the consensus maximum likelihood phylogenetic tree of 762 isolates. For each transition type, tip states were randomized 1,000 times (preserving source frequencies) to generate null distributions of transition counts. Each facet shows the distribution of transition counts from the null model (histogram) for a specific transition type. Solid red lines indicate the observed number of transitions; dashed black lines mark the central 95% confidence interval from the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2).", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, eval=TRUE}
 
 # Convert randomizations to long format
 transitions_long <- as.data.frame(all_transitions) %>%
@@ -2023,7 +2023,7 @@ transitions_long$Transition <- gsub("_", " ", transitions_long$Transition)
 ci_df$Transition <- gsub("_", " ", ci_df$Transition)
 
 # Plot
-figureS4 = ggplot(transitions_long, aes(x = Count)) +
+FigureS2 = ggplot(transitions_long, aes(x = Count)) +
   geom_histogram(binwidth = 1, fill = "gray70", color = "gray70", boundary = 1) +
   geom_vline(data = ci_df, aes(xintercept = CI_Lower, linetype = "95% CI"), color = "black", linewidth = 0.5) +
   geom_vline(data = ci_df, aes(xintercept = CI_Upper, linetype = "95% CI"), color = "black", linewidth = 0.5) +
@@ -2048,17 +2048,17 @@ figureS4 = ggplot(transitions_long, aes(x = Count)) +
     override.aes = list(color = c("red", "black"))))
 
 # Print the plot to the notebook
-print(figureS4)
+print(FigureS2)
 
 # Save as PDF in A4 portrait format
-#ggsave("figures/FigureS4.pdf", plot = figureS4, width = 8.27, height = 11.69, units = "in")
+#ggsave("figures/FigureS2.pdf", plot = FigureS2, width = 8.27, height = 11.69, units = "in")
 ```
 
-### 7.1.5 Plot Figure S5
+### 7.1.5 Plot Exteded Data Fig. 3
 
 This chunk combines Z-scores from the full wastewater and clinical isolates dataset and all major STs (restricted to wastewater and clinical sources) into a single, comparative visualization. Each boxplot shows the distribution of Z-scores across bootstrap trees for a specific transition. Red dashed lines mark the ±1.96 threshold, indicating 95% confidence bounds under the null model. `eval = FALSE` is set below to avoid re-running the code for plotting, as the figure has already been generated in Section 6.5. You can re-enable evaluation if you wish to regenerate the plot or apply modifications.
 
-```{r fig:figureS5, fig.cap = "Fig. S5: Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for wastewater and clinical isolates (WWC). Transitions between collection sources (clinics, wastewater) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees, considering only isolates from wastewater and clinical sources. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (WWC-only full dataset and the five dominant sequence types: ST131, ST10, ST38, ST69, ST1193, all restricted to WWC isolates). The legend indicates the number of isolates retained in each subset. Red dashed lines mark ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=8, fig.width=10, fig.lp=NULL, warning=FALSE, eval=TRUE}
+```{r fig:extededDataFigure3, fig.cap = "Exteded Data Fig. 3: Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for wastewater and clinical isolates (WWC). Transitions between collection sources (clinics, wastewater) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees, considering only isolates from wastewater and clinical sources. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (WWC-only full dataset and the five dominant sequence types: ST131, ST10, ST38, ST69, ST1193, all restricted to WWC isolates). The legend indicates the number of isolates retained in each subset. Red dashed lines mark ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=8, fig.width=10, fig.lp=NULL, warning=FALSE, eval=TRUE}
 
 # Add group labels
 z_scores_wwc$Group <- "Wastewater and clinical isolates"
@@ -2103,7 +2103,7 @@ trans_levels <- levels(z_scores_combined_full_wwc$Transition)
 vline_positions <- seq(1.5, length(trans_levels) - 0.5, by = 1)
 
 # Plot
-figureS5 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
+extededDataFigure3 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
   geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.1),
                outlier.shape = NA, width = 1, linewidth = 0.2) +
   geom_hline(yintercept = c(-1.96, 1.96), linetype = "dashed", color = "red", linewidth = 0.4) +
@@ -2148,10 +2148,10 @@ figureS5 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, f
   geom_vline(xintercept = vline_positions, linetype = "solid", color = "black", size = 0.2)
 
 # Print the plot to the notebook
-print(figureS5)
+print(extededDataFigure3)
 
 # Save as PDF in A4 portrait format
-ggsave("figures/FigureS5.pdf", plot = figureS5, width = 11.69, height = 8.27, units = "in")
+ggsave("figures/extededDataFigure3.pdf", plot = extededDataFigure3, width = 11.69, height = 8.27, units = "in")
 ```
 
 ## 7.2 Consensus tree analysis
@@ -2948,9 +2948,9 @@ ggplot(z_scores_combined_full, aes(x = Transition, y = Z_score, fill = Group, co
 
 ```
 
-### 7.3.4 Table S12
+### 7.3.4 Table S9
 
-```{r tableS12, warning=FALSE, message=FALSE, eval=TRUE}
+```{r TableS9, warning=FALSE, message=FALSE, eval=TRUE}
 
 # Improved helper: add missing columns if not present, keep existing ones
 standardize_significance_df <- function(df, dataset_name) {
@@ -2988,22 +2988,22 @@ df_st69    <- standardize_significance_df(significance_summary_st69,   "ST69")
 df_st1193  <- standardize_significance_df(significance_summary_st1193, "ST1193")
 
 # Combine
-tableS12 <- bind_rows(df_full, df_st131, df_st10, df_st38, df_st69, df_st1193)
+TableS9 <- bind_rows(df_full, df_st131, df_st10, df_st38, df_st69, df_st1193)
 
 # Clean transition labels
-tableS12$Transition <- gsub("_to_", " to ", tableS12$Transition)
+TableS9$Transition <- gsub("_to_", " to ", TableS9$Transition)
 
 # Reorder columns: Dataset first
-tableS12 <- tableS12[, c("Dataset", "Transition", "Below 95% CI", "Within 95% CI", "Above 95% CI")]
+TableS9 <- TableS9[, c("Dataset", "Transition", "Below 95% CI", "Within 95% CI", "Above 95% CI")]
 
 # Display the table
-tableS12 %>%
+TableS9 %>%
   kable(
     format = "html",
     longtable = TRUE,
     booktabs = TRUE,
     escape = FALSE,
-    caption = "Table S12: Significance summary of transition frequencies across 1,000 bootstrap phylogenies for the full dataset and the five most dominant sequence types (ST131, ST10, ST38, ST69, ST1193). The table reports the number of bootstrap trees in which the observed number of transitions between sources fell below, within, or above the central 95% confidence interval of the null distribution generated by 1,000 random permutations. Transitions with counts below the 95% CI (columns 'Below 95% CI') or above the 95% CI (columns 'Above 95% CI') indicate significant deviation from random expectations at the 0.05 level."
+    caption = "Table S9: Significance summary of transition frequencies across 1,000 bootstrap phylogenies for the full dataset and the five most dominant sequence types (ST131, ST10, ST38, ST69, ST1193). The table reports the number of bootstrap trees in which the observed number of transitions between sources fell below, within, or above the central 95% confidence interval of the null distribution generated by 1,000 random permutations. Transitions with counts below the 95% CI (columns 'Below 95% CI') or above the 95% CI (columns 'Above 95% CI') indicate significant deviation from random expectations at the 0.05 level."
   ) %>%
   kable_styling(
     full_width = FALSE,
@@ -3012,7 +3012,7 @@ tableS12 %>%
   ) 
 
 # Save to file
-#write.csv(tableS12, "./tables/TableS12.csv", row.names = FALSE)
+#write.csv(TableS9, "./tables/TableS9.csv", row.names = FALSE)
 ```
 
 ## 7.4 Wastewater and clinical isolates only (WWC)
@@ -3576,9 +3576,9 @@ ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group
   geom_vline(xintercept = vline_positions, linetype = "solid", color = "black", size = 0.2)
 ```
 
-### 7.4.5 Table S13
+### 7.4.5 Table S10
 
-```{r tableS13, warning=FALSE, message=FALSE, eval=TRUE}
+```{r TableS10, warning=FALSE, message=FALSE, eval=TRUE}
 
 # Helper function to clean and standardize WWC significance data frames
 standardize_significance_wwc_df <- function(df_wwc, dataset_name) {
@@ -3606,7 +3606,7 @@ df_st69_wwc     <- standardize_significance_wwc_df(significance_summary_wwc_st69
 df_st1193_wwc   <- standardize_significance_wwc_df(significance_summary_wwc_st1193, "ST1193")
 
 # Combine all
-tableS13 <- bind_rows(
+TableS10 <- bind_rows(
   df_full_wwc,
   df_st131_wwc,
   df_st10_wwc,
@@ -3616,16 +3616,16 @@ tableS13 <- bind_rows(
 )
 
 # Clean transition labels
-tableS13$Transition <- gsub("_to_", " to ", tableS13$Transition)
+TableS10$Transition <- gsub("_to_", " to ", TableS10$Transition)
 
-# Display Table S13
-tableS13 %>%
+# Display Table S10
+TableS10 %>%
   kable(
     format = "html",
     longtable = TRUE,
     booktabs = TRUE,
     escape = FALSE,
-    caption = "Table S13: Significance summary of transition frequencies across 1,000 bootstrap phylogenies based on isolates from wastewater and clinical sources only (WWC). The table reports the number of bootstrap trees in which observed transitions between wastewater and clinics fell below, within, or above the central 95% confidence interval (CI) of the null distribution from 1,000 random permutations. Results are shown for the full WWC phylogeny and for the five most dominant sequence types (ST131, ST10, ST38, ST69, ST1193). Transitions falling below the 95% CI (column 'Below 95% CI') indicate significantly fewer transitions than expected under the null model."
+    caption = "Table S10: Significance summary of transition frequencies across 1,000 bootstrap phylogenies based on isolates from wastewater and clinical sources only (WWC). The table reports the number of bootstrap trees in which observed transitions between wastewater and clinics fell below, within, or above the central 95% confidence interval (CI) of the null distribution from 1,000 random permutations. Results are shown for the full WWC phylogeny and for the five most dominant sequence types (ST131, ST10, ST38, ST69, ST1193). Transitions falling below the 95% CI (column 'Below 95% CI') indicate significantly fewer transitions than expected under the null model."
   ) %>%
   kable_styling(
     full_width = FALSE,
@@ -3634,5 +3634,5 @@ tableS13 %>%
   )
 
 # Save to file
-#write.csv(tableS13, "./tables/TableS13.csv", row.names = FALSE)
+#write.csv(TableS10, "./tables/TableS10.csv", row.names = FALSE)
 ```
