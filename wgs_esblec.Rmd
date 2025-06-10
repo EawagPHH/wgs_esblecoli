@@ -32,7 +32,7 @@ This R Markdown notebook documents the full analysis pipeline for assessing the 
 
 -   Genetic Relatedness: SNP-based similarity analysis to identify closely related isolates, within and between compartments, across defined SNP thresholds (Tables S10–S11, Fig. 4).
 
--   Ancestral State Reconstruction and Transition Analyses: Maximum parsimony-based reconstruction of transmission events between compartments across a consensus tree and 1,000 bootstrap phylogenies. Observed transitions are compared against null distributions generated via randomization (Tables S12–S13, Fig. 5, Exteded Data Fig. 3, Fig. S3).
+-   Ancestral State Reconstruction and Transition Analyses: Maximum parsimony-based reconstruction of transmission events between compartments across a consensus tree and 1,000 bootstrap phylogenies. Observed transitions are compared against null distributions generated via randomization (Tables S12–S13, Fig. 5, Extended Data Fig. 3, Fig. S3).
 
 -   ST-Specific and Compartment-Restricted Analyses: Targeted transition analyses are conducted for the five most prevalent STs (ST131, ST10, ST38, ST69, ST1193) and on a subset including only wastewater and clinical isolates to assess directional signals in transmission dynamics.
 
@@ -2054,11 +2054,11 @@ print(FigureS2)
 #ggsave("figures/FigureS2.pdf", plot = FigureS2, width = 8.27, height = 11.69, units = "in")
 ```
 
-### 7.1.5 Plot Exteded Data Fig. 3
+### 7.1.5 Plot Extended Data Fig. 3
 
 This chunk combines Z-scores from the full wastewater and clinical isolates dataset and all major STs (restricted to wastewater and clinical sources) into a single, comparative visualization. Each boxplot shows the distribution of Z-scores across bootstrap trees for a specific transition. Red dashed lines mark the ±1.96 threshold, indicating 95% confidence bounds under the null model. `eval = FALSE` is set below to avoid re-running the code for plotting, as the figure has already been generated in Section 6.5. You can re-enable evaluation if you wish to regenerate the plot or apply modifications.
 
-```{r fig:extededDataFigure3, fig.cap = "Exteded Data Fig. 3: Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for wastewater and clinical isolates (WWC). Transitions between collection sources (clinics, wastewater) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees, considering only isolates from wastewater and clinical sources. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (WWC-only full dataset and the five dominant sequence types: ST131, ST10, ST38, ST69, ST1193, all restricted to WWC isolates). The legend indicates the number of isolates retained in each subset. Red dashed lines mark ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=8, fig.width=10, fig.lp=NULL, warning=FALSE, eval=TRUE}
+```{r fig:ExtendedDataFigure3, fig.cap = "Extended Data Fig. 3: Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for wastewater and clinical isolates (WWC). Transitions between collection sources (clinics, wastewater) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees, considering only isolates from wastewater and clinical sources. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (WWC-only full dataset and the five dominant sequence types: ST131, ST10, ST38, ST69, ST1193, all restricted to WWC isolates). The legend indicates the number of isolates retained in each subset. Red dashed lines mark ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=8, fig.width=10, fig.lp=NULL, warning=FALSE, eval=TRUE}
 
 # Add group labels
 z_scores_wwc$Group <- "Wastewater and clinical isolates"
@@ -2103,7 +2103,7 @@ trans_levels <- levels(z_scores_combined_full_wwc$Transition)
 vline_positions <- seq(1.5, length(trans_levels) - 0.5, by = 1)
 
 # Plot
-extededDataFigure3 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
+ExtendedDataFigure3 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
   geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.1),
                outlier.shape = NA, width = 1, linewidth = 0.2) +
   geom_hline(yintercept = c(-1.96, 1.96), linetype = "dashed", color = "red", linewidth = 0.4) +
@@ -2148,10 +2148,10 @@ extededDataFigure3 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = 
   geom_vline(xintercept = vline_positions, linetype = "solid", color = "black", size = 0.2)
 
 # Print the plot to the notebook
-print(extededDataFigure3)
+print(ExtendedDataFigure3)
 
 # Save as PDF in A4 portrait format
-ggsave("figures/extededDataFigure3.pdf", plot = extededDataFigure3, width = 11.69, height = 8.27, units = "in")
+ggsave("figures/ExtendedDataFig3.pdf", plot = ExtendedDataFigure3, width = 11.69, height = 8.27, units = "in")
 ```
 
 ## 7.2 Consensus tree analysis
