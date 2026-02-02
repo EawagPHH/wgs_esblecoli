@@ -517,9 +517,9 @@ table_betalactamase %>%
 
 ```
 
-### 5.3.3 Heatmap of beta-lactamase genes
+### 5.3.3 Heatmap of beta-lactamase genes (FigureS3)
 
-```{r plot-FigureS2, fig.cap = "Fig. S2: Co-occurrence of β-lactamase genes across ESBL-producing *Escherichia coli* isolates stratified by source (clinics, cattle, wastewater, and wildlife). The heatmap displays individual isolates (rows) and β-lactamase genes (columns). Each tile indicates the presence of a specific gene in a given isolate identified using the Comprehensive Antibiotic Resistance Database (CARD). Genes are grouped and color-coded by gene family: CTX-M (orange), TEM (skyblue), SHV (yellow), OXA (red), and Other (grey).", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
+```{r plot-FigureS3, fig.cap = "Fig. S3: Co-occurrence of β-lactamase genes across ESBL-producing *Escherichia coli* isolates stratified by source (clinics, cattle, wastewater, and wildlife). The heatmap displays individual isolates (rows) and β-lactamase genes (columns). Each tile indicates the presence of a specific gene in a given isolate identified using the Comprehensive Antibiotic Resistance Database (CARD). Genes are grouped and color-coded by gene family: CTX-M (orange), TEM (skyblue), SHV (yellow), OXA (red), and Other (grey).", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
 
 
 # Clean data and remove genes with all NAs
@@ -583,7 +583,7 @@ heatmap_long <- heatmap_long %>%
   ))
 
 # Plot heatmaps faceted by Source
-FigureS2 = ggplot(heatmap_long %>% filter(Presence == 1), aes(x = Gene, y = Sample)) +
+FigureS3 = ggplot(heatmap_long %>% filter(Presence == 1), aes(x = Gene, y = Sample)) +
   geom_tile(aes(fill = FamilyLabel), color = "grey90") +
   scale_fill_manual(
     values = legend_family_colors,
@@ -611,10 +611,10 @@ theme(
     y = "Isolate"
   )
 
-print(FigureS2)
+print(FigureS3)
 
 # save figure
-#ggsave("./figures/FigureS2.pdf", plot = FigureS2, width = 11.69, height = 8.27 , units = "in")
+#ggsave("./figures/FigureS3.pdf", plot = FigureS3, width = 11.69, height = 8.27 , units = "in")
 ```
 
 ## 5.4 Non-beta-lactamase genes
@@ -711,9 +711,9 @@ colnames(table_nonbetalactamase) <- gsub("_", " ", colnames(table_nonbetalactama
 colnames(table_nonbetalactamase)[-1] <- paste0(colnames(table_nonbetalactamase)[-1], " (n; %)")
 ```
 
-### 5.4.3 Plot FigureS7
+### 5.4.3 Plot FigureS8
 
-```{r fig:FigureS7, fig.cap = "Fig. S7: Distribution of antibiotic resistance genes across sources in ESBL-producing *E. coli* isolates. This figure shows the proportion of ESBL-*E. coli* isolates carrying genes associated with various antibiotic resistance classes, based on annotations from the Comprehensive Antibiotic Resistance Database (CARD). All resistance genes, excluding β-lactamases, that were detected in at least 5% of isolates from any source are displayed. Each panel represents a different antibiotic class, with colors indicating the sources: clinics (pink), cattle (gold), wildlife (green), and wastewater (blue). Antibiotic resistance classes include aminocoumarins, aminoglycosides, diaminopyrimidines, fluoroquinolones, lincosamides, macrolides, nitroimidazoles, peptides, phenicols, phosphonic acids, rifamycins, sulfonamides, tetracyclines, streptogramins, and disinfectants. When a gene is annotated as conferring resistance to multiple antibiotic classes, it is displayed in all relevant facets. Efflux pumps represent genes conferring resistance to multiple antibiotic classes by actively exporting antibiotics from bacterial cells. Each bar shows the proportion of isolates from a specific source carrying the corresponding gene.", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, message=FALSE, eval=TRUE}
+```{r fig:FigureS8, fig.cap = "Fig. S8: Distribution of antibiotic resistance genes across sources in ESBL-producing *E. coli* isolates. This figure shows the proportion of ESBL-*E. coli* isolates carrying genes associated with various antibiotic resistance classes, based on annotations from the Comprehensive Antibiotic Resistance Database (CARD). All resistance genes, excluding β-lactamases, that were detected in at least 5% of isolates from any source are displayed. Each panel represents a different antibiotic class, with colors indicating the sources: clinics (pink), cattle (gold), wildlife (green), and wastewater (blue). Antibiotic resistance classes include aminocoumarins, aminoglycosides, diaminopyrimidines, fluoroquinolones, lincosamides, macrolides, nitroimidazoles, peptides, phenicols, phosphonic acids, rifamycins, sulfonamides, tetracyclines, streptogramins, and disinfectants. When a gene is annotated as conferring resistance to multiple antibiotic classes, it is displayed in all relevant facets. Efflux pumps represent genes conferring resistance to multiple antibiotic classes by actively exporting antibiotics from bacterial cells. Each bar shows the proportion of isolates from a specific source carrying the corresponding gene.", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, message=FALSE, eval=TRUE}
 
 # Expand rows where Class contains multiple values (split on "_")
 gene_counts_nonbl_by_source <- gene_counts_nonbl_by_source %>%
@@ -799,7 +799,7 @@ nonbl_plot <- ggplot(gene_counts_nonbl_by_source, aes(y = Proportion, x = Gene, 
 print(nonbl_plot)
 
 # Save non-beta-lactamase ARGs figure
-#ggsave("./figures/FigureS7.pdf", plot = nonbl_plot, width =11.69 , height =8.27  , units = "in")
+#ggsave("./figures/FigureS8.pdf", plot = nonbl_plot, width =11.69 , height =8.27  , units = "in")
 ```
 
 ### 5.4.5 Filter for clinically relevant non-beta-lactamase
@@ -1241,9 +1241,9 @@ write.table(dunn_results_formatted, fileConn, sep = ",", row.names = FALSE, col.
 close(fileConn)
 ```
 
-### 5.7.3 Plot FigureS3
+### 5.7.3 Plot FigureS4
 
-```{r plot-FigureS3, fig.cap = "Fig. S3: Regional variation in antibiotic resistance genes (ARGs) distribution across clinical, cattle, wastewater, and wildlife sources in Switzerland. Boxplots show the number of ARGs detected per isolate from clinics (pink), cattle (gold), wildlife (green), and wastewater (blue) across regions of Switzerland. Each panel represents a distinct region, and each boxplot reflects the distribution of ARG counts within a specific source in that region. Only sources with at least three isolates per region are included. P-values from the Kruskal-Wallis test are indicated in the bottom left corner of each panel. Significant differences (p-value < 0.05) are marked with *. When p-value = NA, the test was not performed due to the presence of only one source category in that region.", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
+```{r plot-FigureS4, fig.cap = "Fig. S4: Regional variation in antibiotic resistance genes (ARGs) distribution across clinical, cattle, wastewater, and wildlife sources in Switzerland. Boxplots show the number of ARGs detected per isolate from clinics (pink), cattle (gold), wildlife (green), and wastewater (blue) across regions of Switzerland. Each panel represents a distinct region, and each boxplot reflects the distribution of ARG counts within a specific source in that region. Only sources with at least three isolates per region are included. P-values from the Kruskal-Wallis test are indicated in the bottom left corner of each panel. Significant differences (p-value < 0.05) are marked with *. When p-value = NA, the test was not performed due to the presence of only one source category in that region.", fig.height=6, fig.width=10, warning=FALSE, message=FALSE, eval=TRUE}
 
 # Define custom colors
 custom_colors_friendly <- c("clinics"= "#CC79A7", "wastewater" ="#56B4E9", "wildlife" ="#009E73", "cattle"="#F0E442")
@@ -1268,7 +1268,7 @@ label_coords <- args_region %>%
   mutate(label = ifelse(is.na(label), "p-value = NA", label))
 
 # Create plot
-FigureS3 <- ggplot(args_region, aes(x = Source, y = args, fill = Source)) +
+FigureS4 <- ggplot(args_region, aes(x = Source, y = args, fill = Source)) +
   geom_boxplot(data = args_region_filtered, aes(group = interaction(Source, Region)),
                fill = NA, color = "black", outlier.shape = NA) +
   geom_jitter(aes(color = Source), width = 0.2, height = 0, alpha = 0.7, size=2) +
@@ -1300,10 +1300,10 @@ FigureS3 <- ggplot(args_region, aes(x = Source, y = args, fill = Source)) +
             hjust = 0, vjust = 0, size = 4)
 
 
-print(FigureS3)
+print(FigureS4)
 
 # save figure
-#ggsave("./figures/FigureS3.pdf", plot = FigureS3, width = 11.69, height = 8.27 , units = "in")
+#ggsave("./figures/FigureS4.pdf", plot = FigureS4, width = 11.69, height = 8.27 , units = "in")
 ```
 
 ------------------------------------------------------------------------
@@ -1749,6 +1749,113 @@ print(figure4)
 
 ------------------------------------------------------------------------
 
+## 6.7 SNPs in controls (FigureS2)
+
+The following chunk visualizes the SNP distribution observed among all duplicate comparisons included for quality control. In addition to the 15 ESBL-*E. coli* samples sequenced in duplicate (duplicate1–duplicate15), two *E. coli* reference strains were resequenced multiple times (one strain 9 times and the other 10 times). For these strains, all possible pairwise comparisons were generated, resulting in 36 and 45 pairwise SNP comparisons, respectively. In total, the distribution shown reflects 96 duplicate comparisons used to assess sequencing error.
+
+```{r fig:figureS2, fig.cap = "Fig. S2: Distribution of single-nucleotide polymorphism (SNP) differences among duplicate pairs. Panel A shows duplicate comparisons (control_group = 'duplicate'); Panel B shows HH16H resequenced comparisons (control_group = 'resequenced_HH16H'). The histogram plots the number of pairwise comparisons (y-axis) against SNP differences (x-axis).", fig.height = 8.27, fig.width = 11.69, warning=FALSE, message=FALSE, eval=TRUE}
+
+# Load data (expects columns: control, SNPs, control_group)
+snps_duplicates <- read.csv("controls_snps.csv", header = TRUE)
+
+# Clean potential whitespace in control_group
+snps_duplicates <- snps_duplicates %>%
+  mutate(control_group = str_trim(control_group))
+
+# ---- 1) Subset + label panels ----
+snps_plot <- snps_duplicates %>%
+  dplyr::filter(control_group %in% c("duplicate", "resequenced_strain1", "resequenced_strain2")) %>%
+  dplyr::mutate(
+    panel_key = dplyr::case_when(
+      control_group == "duplicate" ~ "A)",
+      control_group == "resequenced_strain1" ~ "B)",
+      control_group == "resequenced_strain2" ~ "C)",
+      TRUE ~ NA_character_
+    ),
+    panel = dplyr::case_when(
+      control_group == "duplicate" ~ "Duplicate pairs",
+      control_group == "resequenced_strain1" ~ "Strain 1 resequenced",
+      control_group == "resequenced_strain2" ~ "Strain 2 resequenced",
+      TRUE ~ "Other"
+    )
+  )
+
+# ---- 2) Titles with n ----
+panel_ns <- snps_plot %>%
+  dplyr::group_by(panel) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+  dplyr::mutate(panel_title = paste0(panel, " (n=", n, ")"))
+
+title_lookup <- setNames(panel_ns$panel_title, panel_ns$panel)
+
+# ---- 3) Medians per panel ----
+medians_df <- snps_plot %>%
+  dplyr::group_by(panel) %>%
+  dplyr::summarise(median_snp = median(SNPs, na.rm = TRUE), .groups = "drop")
+
+# ---- 4) Plot function (A/B/C label appears in the title) ----
+make_panel_plot <- function(df, panel_letter) {
+
+  if (nrow(df) == 0) {
+    stop(paste0(
+      "No rows found for panel ", panel_letter,
+      ". Check snps_duplicates$control_group (e.g., table(snps_duplicates$control_group))."
+    ))
+  }
+
+  panel_name <- unique(df$panel)
+  if (length(panel_name) != 1) stop("df contains >1 panel label; filter to one panel first.")
+
+  med <- medians_df %>% dplyr::filter(panel == panel_name)
+  panel_title <- title_lookup[[panel_name]]
+
+  ggplot(df, aes(x = SNPs)) +
+    geom_histogram(binwidth = 0.5, fill = "gray70", color = "gray40") +
+    geom_vline(
+      data = med,
+      aes(xintercept = median_snp),
+      color = "red", linetype = "dotted", size = 1,
+      inherit.aes = FALSE
+    ) +
+    geom_text(
+      data = med,
+      aes(x = median_snp + 1.8, y = 20, label = paste0("median = ", median_snp)),
+      color = "red", size = 5,
+      inherit.aes = FALSE
+    ) +
+    scale_x_continuous(
+      breaks = seq(0, max(snps_plot$SNPs, na.rm = TRUE), by = 1)
+    ) +
+    labs(
+      x = "SNP differences",
+      y = "Number of pairwise comparisons",
+      title = paste0(panel_letter, "  ", panel_title)
+    ) +
+    theme_bw(base_size = 12) +
+    theme(
+      plot.title = element_text(hjust = 0, face = "bold", margin = margin(b = 8)),
+      plot.margin = margin(10, 10, 10, 30)
+    )
+}
+
+# ---- 5) Build panels ----
+pA <- make_panel_plot(snps_plot %>% dplyr::filter(panel_key == "A)"), "A)")
+pB <- make_panel_plot(snps_plot %>% dplyr::filter(panel_key == "B)"), "B)")
+pC <- make_panel_plot(snps_plot %>% dplyr::filter(panel_key == "C)"), "C)")
+
+# ---- 6) Arrange: A on top, B & C below ----
+figureS2 <- grid.arrange(
+  pA,
+  arrangeGrob(pB, pC, ncol = 2),
+  ncol = 1
+)
+
+figureS2
+
+# Save Figure S2
+#ggsave("./figures/FigureS2.pdf", plot = figureS2, width = 10, height = 8)
+```
+
 # 7. Transition analysis
 
 This section presents the complete workflow for ancestral state reconstruction and transition analysis of 762 ESBL-producing *Escherichia coli* isolates collected in Switzerland from four sources: cattle, wildlife, clinical settings, and wastewater. The analysis uses maximum parsimony applied to phylogenetic trees to infer ancestral origins and quantify directional transitions between sources. Observed transitions are then compared to randomized null models to assess whether any directional patterns deviate from expectation.
@@ -1991,11 +2098,11 @@ print(figure5)
 #ggsave("figures/Figure5.pdf", plot = figure5, width = 8.27, height = 11.69, units = "in")
 ```
 
-### 7.1.4 Plot Figure S2
+### 7.1.4 Plot Figure S5
 
 This chunk visualizes the null distributions of transitions from the consensus tree randomization. Histograms show how often each transition count occurred under 1000 random permutations, with red and dashed black lines marking the observed count and 95% confidence intervals, respectively.
 
-```{r fig:FigureS4, fig.cap = "Fig. S4: Distribution of observed and randomized transition counts on the consensus phylogeny. Transitions between collection sources (clinics, wastewater, wildlife, cattle) were inferred using maximum parsimony ancestral state reconstruction on the consensus maximum likelihood phylogenetic tree of 762 isolates. For each transition type, tip states were randomized 1,000 times (preserving source frequencies) to generate null distributions of transition counts. Each facet shows the distribution of transition counts from the null model (histogram) for a specific transition type. Solid red lines indicate the observed number of transitions; dashed black lines mark the central 95% confidence interval from the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2).", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, eval=TRUE}
+```{r fig:FigureS5, fig.cap = "Fig. S5: Distribution of observed and randomized transition counts on the consensus phylogeny. Transitions between collection sources (clinics, wastewater, wildlife, cattle) were inferred using maximum parsimony ancestral state reconstruction on the consensus maximum likelihood phylogenetic tree of 762 isolates. For each transition type, tip states were randomized 1,000 times (preserving source frequencies) to generate null distributions of transition counts. Each facet shows the distribution of transition counts from the null model (histogram) for a specific transition type. Solid red lines indicate the observed number of transitions; dashed black lines mark the central 95% confidence interval from the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2).", fig.height=10, fig.width=6, fig.lp=NULL, warning=FALSE, eval=TRUE}
 
 # Convert randomizations to long format
 transitions_long <- as.data.frame(all_transitions) %>%
@@ -2023,7 +2130,7 @@ transitions_long$Transition <- gsub("_", " ", transitions_long$Transition)
 ci_df$Transition <- gsub("_", " ", ci_df$Transition)
 
 # Plot
-FigureS4 = ggplot(transitions_long, aes(x = Count)) +
+FigureS5 = ggplot(transitions_long, aes(x = Count)) +
   geom_histogram(binwidth = 1, fill = "gray70", color = "gray70", boundary = 1) +
   geom_vline(data = ci_df, aes(xintercept = CI_Lower, linetype = "95% CI"), color = "black", linewidth = 0.5) +
   geom_vline(data = ci_df, aes(xintercept = CI_Upper, linetype = "95% CI"), color = "black", linewidth = 0.5) +
@@ -2048,17 +2155,17 @@ FigureS4 = ggplot(transitions_long, aes(x = Count)) +
     override.aes = list(color = c("red", "black"))))
 
 # Print the plot to the notebook
-print(FigureS4)
+print(FigureS5)
 
 # Save as PDF in A4 portrait format
-#ggsave("figures/FigureS4.pdf", plot = FigureS4, width = 8.27, height = 11.69, units = "in")
+#ggsave("figures/FigureS5.pdf", plot = FigureS5, width = 8.27, height = 11.69, units = "in")
 ```
 
-### 7.1.5 Plot Fig. S5
+### 7.1.5 Plot Fig. S6
 
 This chunk combines Z-scores from the full wastewater and clinical isolates dataset and all major STs (restricted to wastewater and clinical sources) into a single, comparative visualization. Each boxplot shows the distribution of Z-scores across bootstrap trees for a specific transition. Red dashed lines mark the ±1.96 threshold, indicating 95% confidence bounds under the null model. `eval = FALSE` is set below to avoid re-running the code for plotting, as the figure has already been generated in Section 6.5. You can re-enable evaluation if you wish to regenerate the plot or apply modifications.
 
-```{r fig:FigureS5, fig.cap = "Fig. S5: Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for wastewater and clinical isolates (WWC). Transitions between collection sources (clinics, wastewater) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees, considering only isolates from wastewater and clinical sources. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (WWC-only full dataset and the five dominant sequence types: ST131, ST10, ST38, ST69, ST1193, all restricted to WWC isolates). The legend indicates the number of isolates retained in each subset. Red dashed lines mark ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=8, fig.width=10, fig.lp=NULL, warning=FALSE, eval=TRUE}
+```{r fig:FigureS6, fig.cap = "Fig. S6: Z-score distributions of collection source transitions across 1,000 bootstrap phylogenies for wastewater and clinical isolates (WWC). Transitions between collection sources (clinics, wastewater) were inferred using maximum parsimony ancestral state reconstruction across 1,000 bootstrap phylogenetic trees, considering only isolates from wastewater and clinical sources. For each tree, tip states were randomized 1,000 times (preserving source frequencies) to generate a null distribution of transition counts. Z-scores represent standardized deviations of observed transitions relative to the null. Each boxplot shows Z-score distributions per transition type, stratified by dataset subset (WWC-only full dataset and the five dominant sequence types: ST131, ST10, ST38, ST69, ST1193, all restricted to WWC isolates). The legend indicates the number of isolates retained in each subset. Red dashed lines mark ±1.96, corresponding to the 95% confidence interval under the null model. Transitions were reconstructed using the acctran and ancestral.pars functions from the ape package (v5.7.1) in R (v4.1.2). Positive Z-scores indicate transitions occurring more frequently than expected by chance; negative Z-scores indicate less frequent transitions.", fig.height=8, fig.width=10, fig.lp=NULL, warning=FALSE, eval=TRUE}
 
 # Add group labels
 z_scores_wwc$Group <- "Wastewater and clinical isolates"
@@ -2103,7 +2210,7 @@ trans_levels <- levels(z_scores_combined_full_wwc$Transition)
 vline_positions <- seq(1.5, length(trans_levels) - 0.5, by = 1)
 
 # Plot
-FigureS5 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
+FigureS6 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, fill = Group, color = Group)) +
   geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.1),
                outlier.shape = NA, width = 1, linewidth = 0.2) +
   geom_hline(yintercept = c(-1.96, 1.96), linetype = "dashed", color = "red", linewidth = 0.4) +
@@ -2148,10 +2255,10 @@ FigureS5 = ggplot(z_scores_combined_full_wwc, aes(x = Transition, y = Z_score, f
   geom_vline(xintercept = vline_positions, linetype = "solid", color = "black", size = 0.2)
 
 # Print the plot to the notebook
-print(FigureS5)
+print(FigureS6)
 
 # Save as PDF in A4 portrait format
-ggsave("figures/ExtendedDataFig3.pdf", plot = FigureS5, width = 11.69, height = 8.27, units = "in")
+#ggsave("figures/FigureS6.pdf", plot = FigureS6, width = 11.69, height = 8.27, units = "in")
 ```
 
 ## 7.2 Consensus tree analysis
@@ -3466,7 +3573,7 @@ z_scores_wwc_st1193 <- compute_z_scores_wwc(combined_results_wwc_st1193, all_ran
 
 ```
 
-#### 7.4.4.6 Plot Z-score distributions of WWC subset (Figure S6)
+#### 7.4.4.6 Plot Z-score distributions of WWC subset (Figure S7)
 
 If the full-tree bootstrap analysis for clinical and wastewater isolates (Section 7.4.3) was not re-executed earlier in the notebook, the following chunk reloads the previously saved WWC-specific results. This is necessary to generate the combined Z-score plots shown below.
 
